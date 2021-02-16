@@ -1,0 +1,5 @@
+data/
+indexdir/
+.vscode/
+__pycache__/
+*.pyc
