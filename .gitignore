@@ -1,5 +1,6 @@
 data/
 indexdir/
+l2r/
 .vscode/
 __pycache__/
 *.pyc

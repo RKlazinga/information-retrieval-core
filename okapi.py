@@ -1,26 +1,49 @@
+import numpy as np
 import whoosh.scoring
 
 
-class Okapi(whoosh.scoring.WeightingModel):
-    def scorer(self, searcher, fieldname, text, qf):
-        return OkapiScorer()
+class OkapiWeighting(whoosh.scoring.WeightingModel):
+    def scorer(self, searcher, fieldname, text, qf=1):
+        return self.OkapiScorer(searcher, fieldname, text, qf=qf)
 
-    def final(self, searcher, docnum, score):
-        return super().final(searcher, docnum, score)
+    class OkapiScorer(whoosh.scoring.BaseScorer):
+        def __init__(self, searcher, fieldname, text, qf=1):
+            self.searcher = searcher
+            self.fieldname = fieldname
+            self.text = text
+            self.qf = qf
 
-    def idf(self, searcher, fieldname, text):
-        return super().idf(searcher, fieldname, text)
+        def bm25(self, N, df, tf, l_d, l_avg, k1=1.2, b=0.75):
+            """https://nlp.stanford.edu/IR-book/html/htmledition/okapi-bm25-a-non-binary-model-1.html
+
+            Args:
+                N (int): number of documents
+                df (int): frequency of term in all documents
+                tf (int): frequency of term in this document
+                l_d (int): length of this document
+                l_avg (int): length of the average document
+                k1 (float): hyperparam: impact of document frequency
+                b (float): hyperparam: determines scaling of document length, [0, 1]
+
+            Returns:
+                Okapi BM25 score
+            """
+            return np.log(N / df) * ((k1 + 1) * tf) / (k1 * ((1 - b) + b * (l_d / l_avg)) + tf)
+
+        def score(self, matcher):
+            docid = matcher.id()
+
+            numdocs = self.searcher.doc_count_all()
+            length = self.searcher.doc_field_length(docid, self.fieldname)
+            avg_length = self.searcher.avg_field_length(self.fieldname)
+
+            df = self.searcher.reader().term_info(self.fieldname, self.text).doc_frequency()
+            freq_in_doc = matcher.weight()
+
+            return self.bm25(numdocs, df, freq_in_doc, length, avg_length)
+
+        def max_quality(self):
+            return 1
 
 
-class OkapiScorer(whoosh.scoring.BaseScorer):
-    def __init__(self) -> None:
-        super().__init__()
-
-    def score(self, matcher):
-        # Returns a score for the current document of the matcher.
-        for fieldname, termtext in matcher.matching_terms():
-            print(termtext)
-            return 1 if b"hello" in termtext else 0
-
-    def supports_block_quality(self):
-        return False
+weighting = OkapiWeighting()
