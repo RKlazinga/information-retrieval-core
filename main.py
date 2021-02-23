@@ -25,12 +25,13 @@ schema = Schema(
     body=TEXT(analyzer=StemmingAnalyzer()),
 )
 
-if not os.path.exists("indexdir" if args.num_docs is None else "l2r"):
-    os.mkdir("indexdir" if args.num_docs is None else "l2r")
-    index.create_in("indexdir" if args.num_docs is None else "l2r", schema)
+index_dir = "/HDDs/msmarco" if args.num_docs is None else "data/quickidx"
+if not os.path.exists(index_dir):
+    os.mkdir(index_dir)
+    index.create_in(index_dir, schema)
     args.reload = True
 
-storage = FileStorage("indexdir" if args.num_docs is None else "l2r")
+storage = FileStorage(index_dir)
 # Open an existing index
 ix = storage.open_index()
 
@@ -42,7 +43,7 @@ if args.reload:
     with open(args.data, "r") as docs:
         i = 0
         line = docs.readline()
-        pbar = tqdm(total=args.num_docs if args.num_docs is not None else 3213835)
+        pbar = tqdm(total=args.num_docs if args.num_docs is not None else 3_213_835)
         while line != "" and (args.num_docs is None or i < args.num_docs):
             docid, url, title, body = line.split("\t")
             writer.add_document(docid=docid, url=url, title=title, body=body)
@@ -60,16 +61,14 @@ def search(query):
     print("OKAPI")
     with ix.searcher(weighting=okapi.weighting) as s:
         results = s.search(q, terms=True)
-        if results.has_matched_terms():
-            for hit in results:
-                print(hit, hit.matched_terms())
+        for hit in results:
+            print(hit, hit.matched_terms())
 
     print("\nBM25F")
     with ix.searcher() as s:
         results = s.search(q, terms=True)
-        if results.has_matched_terms():
-            for hit in results:
-                print(hit, hit.matched_terms())
+        for hit in results:
+            print(hit, hit.matched_terms())
 
 
 qp = QueryParser("body", schema=ix.schema)
