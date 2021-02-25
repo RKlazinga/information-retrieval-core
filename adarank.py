@@ -28,7 +28,7 @@ def get_features():
     labels = []
     wfdoc, idf, wfcorp = {}, {}, {}
 
-    for _, (_, query, _, _, _, pos, _, _, _, neg) in tqdm(triples.iterrows()):
+    for idx, (_, query, _, _, _, pos, _, _, _, neg) in tqdm(triples.iterrows()):
         try:
             query = [token.text for token in stem(query)]
 
@@ -56,7 +56,8 @@ def get_features():
 
                 features = torch.cat([features, docfeats[None, :]], axis=0)
 
-                labels.append(i)
+                if i == 1:  # we've added a positively labeled doc
+                    labels.append(features.shape[0] - 1)
         except:
             print("\n\n\nERRROR")
             print("query", query)
@@ -66,8 +67,8 @@ def get_features():
     return features, torch.tensor(labels)
 
 
-def dcg(relevances, rank):
-    relevances = np.asarray(relevances)[:rank]
+def dcg(relevances):
+    relevances = np.asarray(relevances)
     n_relevances = len(relevances)
     if n_relevances == 0:
         return 0.0
@@ -75,28 +76,37 @@ def dcg(relevances, rank):
     return np.sum(relevances / discounts)
 
 
-def ndcg(relevances, rank):
-    best_dcg = dcg(sorted(relevances, reverse=True), rank)
+def ndcg(pi, y, rank=5):
+    best_ordering = np.zeros(rank)
+    best_ordering[0] = 1
+    best_dcg = dcg(best_ordering)
+
+    y_onehot = np.zeros(len(pi))
+    y_onehot[y] = 1
+
     if best_dcg == 0:
         return 0.0
-    return dcg(relevances, rank) / best_dcg
 
-
-def metric(pi, y):
-    return ndcg(relevances=y.numpy()[pi.numpy()], rank=len(pi) - 1)
+    return dcg(y_onehot[pi[:rank]]) / best_dcg
 
 
 class WeakRanker(torch.nn.Module):
-    def __init__(self, P, x, y):
+    def __init__(self, weighting, features, labels):
         super().__init__()
 
         self.feature_idx = 0
 
         max_val = -1e30
-        for k in range(x.shape[1]):
-            if max_val < (val := torch.sum(P * metric(self.sort(x, k), y))):
+        for k in range(features.shape[1]):
+            permutation = self.sort(features, k)
+            val = 0
+            for i, l in enumerate(labels):
+                val += weighting[i] * metric(permutation, l)
+            print(val)
+            if max_val < val.item():
                 max_val = val
                 self.feature_idx = k
+        print("Best feature:", self.feature_idx)
 
     def forward(self, x, k=None):
         # return scores of x
@@ -106,8 +116,7 @@ class WeakRanker(torch.nn.Module):
             return x[:, self.feature_idx]
 
     def sort(self, x, k=None):
-        pi = torch.argsort(self.forward(x, k))
-        return pi
+        return torch.argsort(self.forward(x, k))
 
 
 class BoostedRanker(torch.nn.Module):
@@ -119,26 +128,28 @@ class BoostedRanker(torch.nn.Module):
     def forward(self, x):
         # return ranking of x
         out = torch.zeros((x.shape[0]))
-        for alpha, h in zip(self.alphas, self.hs):
-            out += alpha * h(x)
+        for weight, learner in zip(self.alphas, self.hs):
+            out += weight * learner(x)
         return out
 
     def sort(self, x):
-        # evaluate all docs and sort by score
-        pi = torch.argsort(self.forward(x))
-        return pi
+        return torch.argsort(self.forward(x))
 
 
 if __name__ == "__main__":
+    metric = ndcg
     if not os.path.exists("data/features.pth"):
-        X, y = get_features()
-        torch.save(X, "data/features.pth")
-        torch.save(y, "data/labels.pth")
-    else:
-        X = torch.load("data/features.pth")
-        y = torch.load("data/labels.pth")
+        doc_feats, correct_docs = get_features()
 
-    P = torch.ones(len(y)) / len(y)
+        torch.save(doc_feats, "data/features.pth")
+        torch.save(correct_docs, "data/labels.pth")
+    else:
+        doc_feats = torch.load("data/features.pth")
+        correct_docs = torch.load("data/labels.pth")
+
+    print(doc_feats.shape, correct_docs.shape)
+
+    Ps = [torch.ones(len(correct_docs)) / len(correct_docs)]
 
     alphas = []
     hs = []
@@ -146,16 +157,31 @@ if __name__ == "__main__":
     depth = 20
 
     for t in range(depth):
-        h = WeakRanker(P, X, y)
+        h = WeakRanker(Ps[-1], doc_feats, correct_docs)
         hs.append(h)
 
-        pi = h.sort(X)
+        ordering_idxs = h.sort(doc_feats)
 
-        alpha = 1 / 2 * torch.log((torch.sum(P * (1 + metric(pi, y)))) / (P * (1 - metric(pi, y))))
-        alphas.append(alpha)
+        alpha = 0
+        for i, correct_idx in enumerate(correct_docs):
+            alpha += (
+                Ps[-1][i]
+                * (1 + metric(ordering_idxs, correct_idx))
+                / Ps[-1][i]
+                * (1 - metric(ordering_idxs, correct_idx))
+            )
+        alphas.append(torch.log(alpha) / 2)
 
         f = BoostedRanker(alphas, hs)
 
-        pi = f.sort(X)
+        ordering_idxs = f.sort(doc_feats)
 
-        P = torch.nn.functional.softmax(metric(pi, y))  # hier gaat iets mis
+        Ps.append(torch.zeros(len(correct_docs)))
+        norm = 0
+        for i, correct_idx in enumerate(correct_docs):
+            print(ordering_idxs[:5], correct_idx)
+            weight = np.exp(-metric(ordering_idxs, correct_idx))
+            Ps[-1][i] = weight
+            norm += weight
+        Ps[-1] /= norm
+
