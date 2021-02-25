@@ -2,7 +2,6 @@ import os
 
 import numpy as np
 import pandas as pd
-import torch
 import whoosh.analysis
 import whoosh.scoring
 from tqdm import tqdm
@@ -24,7 +23,7 @@ def get_features():
     ndocs = ix.doc_count_all()
     avg_doc_len = ix.field_length("body") / ndocs
 
-    features = torch.tensor([[], [], [], [], [], [], []]).T
+    features = np.array([[], [], [], [], [], [], []]).T
     labels = []
     wfdoc, idf, wfcorp = {}, {}, {}
 
@@ -35,7 +34,7 @@ def get_features():
             for i, doc in enumerate([neg] + [pos]):
                 doc = [token.text for token in stem(doc)]
                 intersection = set(query) & set(doc)
-                docfeats = torch.zeros(7)
+                docfeats = np.zeros(7)
 
                 for term in intersection:
                     if term not in wfdoc:
@@ -54,7 +53,7 @@ def get_features():
                 if len(intersection) > 0:
                     docfeats[6] = np.log(docfeats[6])
 
-                features = torch.cat([features, docfeats[None, :]], axis=0)
+                features = np.concatenate([features, docfeats[None, :]], axis=0)
 
                 if i == 1:  # we've added a positively labeled doc
                     labels.append(features.shape[0] - 1)
@@ -64,124 +63,70 @@ def get_features():
             print("pos", pos)
             print("neg", neg)
 
-    return features, torch.tensor(labels)
+    return features, np.array(labels)
 
 
-def dcg(relevances):
-    relevances = np.asarray(relevances)
-    n_relevances = len(relevances)
-    if n_relevances == 0:
-        return 0.0
-    discounts = np.log2(np.arange(n_relevances) + 2)
-    return np.sum(relevances / discounts)
+def dcg(y_true, y_pred, rank=None):
+    order = np.argsort(-y_pred)
+    gain = np.take(y_true, order[:rank])
+    discounts = np.log2(np.arange(len(gain)) + 2)
+    return np.sum(gain / discounts)
 
 
-def ndcg(pi, y, rank=5):
-    best_ordering = np.zeros(rank)
-    best_ordering[0] = 1
-    best_dcg = dcg(best_ordering)
-
-    y_onehot = np.zeros(len(pi))
-    y_onehot[y] = 1
-
-    if best_dcg == 0:
-        return 0.0
-
-    return dcg(y_onehot[pi[:rank]]) / best_dcg
-
-
-class WeakRanker(torch.nn.Module):
-    def __init__(self, weighting, features, labels):
-        super().__init__()
-
-        self.feature_idx = 0
-
-        max_val = -1e30
-        for k in range(features.shape[1]):
-            permutation = self.sort(features, k)
-            val = 0
-            for i, l in enumerate(labels):
-                val += weighting[i] * metric(permutation, l)
-            print(val)
-            if max_val < val.item():
-                max_val = val
-                self.feature_idx = k
-        print("Best feature:", self.feature_idx)
-
-    def forward(self, x, k=None):
-        # return scores of x
-        if k is not None:
-            return x[:, k]
-        else:
-            return x[:, self.feature_idx]
-
-    def sort(self, x, k=None):
-        return torch.argsort(self.forward(x, k))
-
-
-class BoostedRanker(torch.nn.Module):
-    def __init__(self, alphas, hs):
-        super().__init__()
-        self.alphas = alphas
-        self.hs = hs
-
-    def forward(self, x):
-        # return ranking of x
-        out = torch.zeros((x.shape[0]))
-        for weight, learner in zip(self.alphas, self.hs):
-            out += weight * learner(x)
-        return out
-
-    def sort(self, x):
-        return torch.argsort(self.forward(x))
+def ndcg(y_pred, correct_idxs, rank=None):
+    n_q, n_d = len(correct_idxs), len(y_pred)
+    y_true = np.zeros((n_q, n_d))
+    y_true[np.arange(n_q), correct_idxs] = 1  # for each query, a single 1 where its positive doc is
+    score = np.array([dcg(y_true[i], y_pred, rank=rank) for i in range(n_q)])
+    best_score = np.array([dcg(np.sort(y_true[i]), np.arange(0, n_d), rank=rank) for i in range(n_q)])
+    best_score[best_score == 0] = 1
+    ret = score / best_score
+    print(ret.mean())
+    return ret
 
 
 if __name__ == "__main__":
     metric = ndcg
-    if not os.path.exists("data/features.pth"):
+    if not os.path.exists("data/features.npy"):
         doc_feats, correct_docs = get_features()
-
-        torch.save(doc_feats, "data/features.pth")
-        torch.save(correct_docs, "data/labels.pth")
+        np.save("data/features.npy", doc_feats)
+        np.save("data/labels.npy", correct_docs)
     else:
-        doc_feats = torch.load("data/features.pth")
-        correct_docs = torch.load("data/labels.pth")
+        doc_feats = np.load("data/features.npy")
+        correct_docs = np.load("data/labels.npy")
+
+    y = correct_docs
 
     print(doc_feats.shape, correct_docs.shape)
 
-    Ps = [torch.ones(len(correct_docs)) / len(correct_docs)]
+    P = np.ones(len(correct_docs)) / len(correct_docs)
+    weak_rankers = []binary
+    alpha = np.zeros(doc_feats.shape[1])
 
-    alphas = []
-    hs = []
+    weak_ranker_score = []
+    for k in range(doc_feats.shape[1]):
+        weak_ranker_score.append(ndcg(doc_feats[:, k], correct_docs))
 
-    depth = 20
+    used_feats = []
+    for _ in range(50):
+        best_avg = -np.inf
+        h = None
+        for feat, score in enumerate(weak_ranker_score):
+            if feat in used_feats:
+                continue
+            avg = np.dot(P, score)
+            if avg > best_avg:
+                h = {"feat": feat, "score": score}
+                best_avg = avg
+        if h is None:
+            break  # all features have been used
+        used_feats.append(h["feat"])
 
-    for t in range(depth):
-        h = WeakRanker(Ps[-1], doc_feats, correct_docs)
-        hs.append(h)
+        h["alpha"] = 0.5 * (np.log(np.dot(P, 1 + h["score"]) / np.dot(P, 1 - h["score"])))
+        weak_rankers.append(h)
 
-        ordering_idxs = h.sort(doc_feats)
+        alpha[h["feat"]] += h["alpha"]
 
-        alpha = 0
-        for i, correct_idx in enumerate(correct_docs):
-            alpha += (
-                Ps[-1][i]
-                * (1 + metric(ordering_idxs, correct_idx))
-                / Ps[-1][i]
-                * (1 - metric(ordering_idxs, correct_idx))
-            )
-        alphas.append(torch.log(alpha) / 2)
-
-        f = BoostedRanker(alphas, hs)
-
-        ordering_idxs = f.sort(doc_feats)
-
-        Ps.append(torch.zeros(len(correct_docs)))
-        norm = 0
-        for i, correct_idx in enumerate(correct_docs):
-            print(ordering_idxs[:5], correct_idx)
-            weight = np.exp(-metric(ordering_idxs, correct_idx))
-            Ps[-1][i] = weight
-            norm += weight
-        Ps[-1] /= norm
-
+        score = ndcg(np.dot(doc_feats, alpha), correct_docs)
+        new_P = np.exp(-score)
+        P = new_P / new_P.sum()
