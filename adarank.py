@@ -1,4 +1,5 @@
 import csv
+import os
 import random
 
 import numpy as np
@@ -8,8 +9,7 @@ import whoosh.scoring
 from tqdm import tqdm
 from whoosh.filedb.filestore import FileStorage
 
-
-training_set_size = 1000
+training_set_size = 5000
 
 
 # The query string for each topicid is querystring[topicid]
@@ -30,6 +30,27 @@ with open("data/msmarco-doctrain-qrels.tsv", "rt", encoding="utf8") as f:
             qrel[topicid].append(docid)
         else:
             qrel[topicid] = [docid]
+
+
+# In the corpus tsv, each docid occurs at offset docoffset[docid]
+docoffset = {}
+with open("data/msmarco-docs-lookup.tsv", "rt", encoding="utf8") as f:
+    tsvreader = csv.reader(f, delimiter="\t")
+    for [docid, _, offset] in tsvreader:
+        docoffset[docid] = int(offset)
+
+
+def getbody(docid, f):
+    """getcontent(docid, f) will get content for a given docid (a string) from filehandle f.
+    The content has four tab-separated strings: docid, url, title, body.
+    """
+
+    f.seek(docoffset[docid])
+    line = f.readline()
+    assert line.startswith(docid + "\t"), f"Looking for {docid}, found {line}"
+    linelist = line.rstrip().split("\t")
+    if len(linelist) == 4:
+        return linelist[3]
 
 
 def get_features(num_features=None):
@@ -54,50 +75,50 @@ def get_features(num_features=None):
     wfdoc, idf, wfcorp = {}, {}, {}
 
     num = 0
-    for idx, (query, positives) in tqdm(positive_samples.items()):
-        if num_features is not None and num > num_features:
-            break
-        try:
+    with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as f:
+        for idx, (query, positives) in tqdm(positive_samples.items()):
+            if num_features is not None and num > num_features:
+                break
+
             query = [token.text for token in stem(query)]
 
             labels.append([])
-            for i, doc in enumerate(positives):
-                doc = [token.text for token in stem(doc)]
-                intersection = set(query) & set(doc)
-                docfeats = np.zeros(7)
+            for i, docid in enumerate(positives):
+                body = getbody(docid, f)
+                if body is None:
+                    continue
+                body = [token.text for token in stem(body)]
+                intersection = set(query) & set(body)
+                docfeats = np.zeros(7, dtype=np.float64)
 
                 for term in intersection:
                     if term not in wfdoc:
-                        wfdoc[term] = doc.count(term)
+                        wfdoc[term] = body.count(term)
                         idf[term] = np.log(ndocs / (ix.doc_frequency("body", term) + 1e-8))
                         wfcorp[term] = ix.frequency("body", term) + 1e-8
 
                     docfeats[0] += np.log(wfdoc[term] + 1)
                     docfeats[1] += np.log(idf[term])
-                    docfeats[2] += np.log(wfdoc[term] / len(doc) * idf[term] + 1)
+                    docfeats[2] += np.log(wfdoc[term] / len(body) * idf[term] + 1)
                     docfeats[3] += np.log(ndocs / wfcorp[term] + 1)
-                    docfeats[4] += np.log(wfdoc[term] / len(doc) + 1)
-                    docfeats[5] += np.log(wfdoc[term] * ndocs / (len(doc) * wfcorp[term]) + 1)
-                    docfeats[6] += whoosh.scoring.bm25(idf[term], wfcorp[term], len(doc), avg_doc_len, B=0.75, K1=1.2)
+                    docfeats[4] += np.log(wfdoc[term] / len(body) + 1)
+                    docfeats[5] += np.log(wfdoc[term] * ndocs / (len(body) * wfcorp[term]) + 1)
+                    docfeats[6] += whoosh.scoring.bm25(idf[term], wfcorp[term], len(body), avg_doc_len, B=0.75, K1=1.2)
 
                 if len(intersection) > 0:
                     docfeats[6] = np.log(docfeats[6])
 
                 features = np.concatenate([features, docfeats[None, :]], axis=0)
-                num += 1
+                labels[-1].append(len(features) - 1)
 
-                labels[-1].append(i)
-        except:
-            print("\n\n\nERRROR")
-            print("query", query)
-            print("pos", positives)
+            num += 1
 
-    return features, np.array(labels)
+    return features, labels
 
 
-def dcg(y_true, y_pred, rank):
-    # print(y_pred)
-    order = np.argsort(-y_pred)
+def dcg(y_true, pi_pred, rank):
+    # print(pi_pred)
+    order = np.argsort(-pi_pred)
     gain = np.take(y_true, order[:rank])
     # print(gain)
     discounts = np.log2(np.arange(len(gain)) + 2)
@@ -106,16 +127,27 @@ def dcg(y_true, y_pred, rank):
     return np.sum(gain / discounts)
 
 
-def ndcg(y_pred, correct_idxs, rank=None):
-    n_q, n_d = len(correct_idxs), len(y_pred)
+def ndcg(pi_pred, correct_idxs, rank=None):
+    n_q, n_d = len(correct_idxs), len(pi_pred)
     y_true = np.zeros((n_q, n_d))
-    y_true[correct_idxs] = 1  # for each query, a single 1 where its positive doc is
+    for i, query_idxs in enumerate(correct_idxs):
+        y_true[i, query_idxs] = 1  # for each query, 1s where its positive docs are
 
     # print("score")
-    score = np.array([dcg(y_true[i], y_pred, rank=rank) for i in range(n_q)])
+    score = np.array([dcg(y_true[i], pi_pred, rank=rank) for i in range(n_q)])
 
     # print("best")
-    best_score = np.array([dcg(np.sort(y_true[i]), np.arange(0, n_d), rank=rank) for i in range(n_q)])
+    ordering = np.arange(0, n_d)
+    best_score = np.array(
+        [
+            dcg(
+                np.concatenate((np.zeros(n_d - len(correct_idxs[i])), np.ones(len(correct_idxs[i])))),
+                ordering,
+                rank=rank,
+            )
+            for i in range(n_q)
+        ]
+    )
     best_score[best_score == 0] = 1
 
     ret = score / best_score
@@ -125,17 +157,14 @@ def ndcg(y_pred, correct_idxs, rank=None):
 
 if __name__ == "__main__":
     metric = ndcg
-    # if not os.path.exists("data/features.npy"):
-    doc_feats, correct_docs = get_features(num_features=None)
-    np.save("data/features.npy", doc_feats)
-    np.save("data/labels.npy", correct_docs)
-    # else:
-    #     doc_feats = np.load("data/features.npy")
-    #     correct_docs = np.load("data/labels.npy")
-
-    y = correct_docs
-
-    print(doc_feats.shape, correct_docs.shape)
+    if not os.path.exists("data/features.npy"):
+        doc_feats, correct_docs = get_features(num_features=None)
+        np.save("data/features.npy", doc_feats)
+        np.save("data/labels.npy", correct_docs)
+    else:
+        doc_feats = np.load("data/features.npy")
+        correct_docs = np.load("data/labels.npy")
+    print(doc_feats.shape, len(correct_docs))
 
     P = np.ones(len(correct_docs)) / len(correct_docs)
     weak_rankers = []
@@ -155,6 +184,7 @@ if __name__ == "__main__":
         for feat, score in enumerate(weak_ranker_score):
             if feat in used_feats:
                 continue
+            # print(score)
             avg = np.dot(P, score)
             if avg > best_avg:
                 h = {"feat": feat, "score": score}
@@ -163,19 +193,26 @@ if __name__ == "__main__":
             break  # all features have been used
         used_feats.append(h["feat"])
 
+        # print(P)
         h["alpha"] = 0.5 * (np.log(np.dot(P, 1 + h["score"]) / np.dot(P, 1 - h["score"])))
         weak_rankers.append(h)
 
         alpha[h["feat"]] += h["alpha"]
 
-        score = ndcg(np.dot(doc_feats, alpha), correct_docs)
+        # print(alpha)
+        predictions = np.dot(doc_feats, alpha)
+        # print(predictions)
+        score = ndcg(predictions, correct_docs)
         new_P = np.exp(-score)
         P = new_P / new_P.sum()
 
         if score.mean() > best_score:
             best_alpha = alpha.copy()
             best_score = score.mean()
-        print(score.mean(), alpha)
+        print(score.mean())
+        print(alpha)
+        print(P.min(), P.mean(), P.max())
+        print()
 
     print(best_alpha)
     print(best_score)
