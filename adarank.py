@@ -1,67 +1,218 @@
-import torch
+import csv
+import os
+import random
 
-y = qrels
+import numpy as np
+import pandas as pd
+import whoosh.analysis
+import whoosh.scoring
+from tqdm import tqdm
+from whoosh.filedb.filestore import FileStorage
 
-
-class WeakRanker:
-    def __init__(self, P, x, y):
-        pass
-
-    def forward(x):
-        # return scores of x
-        pass
-
-    def sort(x):
-        # evaluate all docs and sort by score
-        pass
+training_set_size = 5000
 
 
-class BoostedRanker:
-    def __init__(self, P, x, y):
-        torch.sum(alphas * hs(x))
-        pass
-
-    def forward(x):
-        # return scores of x
-        pass
-
-    def sort(x):
-        # evaluate all docs and sort by score
-        pass
+# The query string for each topicid is querystring[topicid]
+querystring = {}
+with open("data/msmarco-doctrain-queries.tsv", "rt", encoding="utf8") as f:
+    tsvreader = csv.reader(f, delimiter="\t")
+    for [topicid, querystring_of_topicid] in tsvreader:
+        querystring[topicid] = querystring_of_topicid
 
 
-def metric(pi, y):
-    # find a listwise metric to optimize
-    pass
+# For each topicid, the list of positive docids is qrel[topicid]
+qrel = {}
+with open("data/msmarco-doctrain-qrels.tsv", "rt", encoding="utf8") as f:
+    tsvreader = csv.reader(f, delimiter=" ")
+    for [topicid, _, docid, rel] in tsvreader:
+        assert rel == "1"
+        if topicid in qrel:
+            qrel[topicid].append(docid)
+        else:
+            qrel[topicid] = [docid]
 
 
-def loss():
-    return torch.sum(torch.log(1 + torch.exp(-metric(pi, y))))  # exponential loss
+# In the corpus tsv, each docid occurs at offset docoffset[docid]
+docoffset = {}
+with open("data/msmarco-docs-lookup.tsv", "rt", encoding="utf8") as f:
+    tsvreader = csv.reader(f, delimiter="\t")
+    for [docid, _, offset] in tsvreader:
+        docoffset[docid] = int(offset)
 
 
-# load qrels of top100?
+def getbody(docid, f):
+    """getcontent(docid, f) will get content for a given docid (a string) from filehandle f.
+    The content has four tab-separated strings: docid, url, title, body.
+    """
 
-# figure out what feature vectors to use
+    f.seek(docoffset[docid])
+    line = f.readline()
+    assert line.startswith(docid + "\t"), f"Looking for {docid}, found {line}"
+    linelist = line.rstrip().split("\t")
+    if len(linelist) == 4:
+        return linelist[3]
 
-P = 1 / len(dataset) * torch.ones(len(dataset))
 
-alphas = []
-hs = []
+def get_features(num_features=None):
+    stem = whoosh.analysis.StemmingAnalyzer()
 
-for t in range(num_iters):
-    x, y = next(dataloader)
+    positive_topics = random.choices(list(querystring.keys()), k=training_set_size)
+    positive_samples = {topic: (querystring[topic], qrel[topic]) for topic in positive_topics}
 
-    h = WeakRanker(P, x, y)
-    hs.append(h)
+    # triples = pd.read_csv(
+    #     "data/triples.tsv",
+    #     sep="\t",
+    #     names=["topic", "query", "pos1", "pos2", "pos3", "pos4", "not1", "not2", "not3", "not4"],
+    # )
+    # print(triples)
 
-    pi = h.rank(x)
+    ix = FileStorage("data/quickidx").open_index().reader()
+    ndocs = ix.doc_count_all()
+    avg_doc_len = ix.field_length("body") / ndocs
 
-    alpha = 1 / 2 * torch.log((torch.sum(P * (1 + metric(pi, y)))) / (P * (1 - metric(pi, y))))
-    alphas.append(alpha)
+    features = np.array([[], [], [], [], [], [], []]).T
+    labels = []
+    wfdoc, idf, wfcorp = {}, {}, {}
 
-    f = BoostedRanker(alphas, hs)
+    num = 0
+    with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as f:
+        for idx, (query, positives) in tqdm(positive_samples.items()):
+            if num_features is not None and num > num_features:
+                break
 
-    pi = f.rank(x)
+            query = [token.text for token in stem(query)]
 
-    P = torch.nn.functional.softmax(metric(pi, y))
+            labels.append([])
+            for i, docid in enumerate(positives):
+                body = getbody(docid, f)
+                if body is None:
+                    continue
+                body = [token.text for token in stem(body)]
+                intersection = set(query) & set(body)
+                docfeats = np.zeros(7, dtype=np.float64)
 
+                for term in intersection:
+                    if term not in wfdoc:
+                        wfdoc[term] = body.count(term)
+                        idf[term] = np.log(ndocs / (ix.doc_frequency("body", term) + 1e-8))
+                        wfcorp[term] = ix.frequency("body", term) + 1e-8
+
+                    docfeats[0] += np.log(wfdoc[term] + 1)
+                    docfeats[1] += np.log(idf[term])
+                    docfeats[2] += np.log(wfdoc[term] / len(body) * idf[term] + 1)
+                    docfeats[3] += np.log(ndocs / wfcorp[term] + 1)
+                    docfeats[4] += np.log(wfdoc[term] / len(body) + 1)
+                    docfeats[5] += np.log(wfdoc[term] * ndocs / (len(body) * wfcorp[term]) + 1)
+                    docfeats[6] += whoosh.scoring.bm25(idf[term], wfcorp[term], len(body), avg_doc_len, B=0.75, K1=1.2)
+
+                if len(intersection) > 0:
+                    docfeats[6] = np.log(docfeats[6])
+
+                features = np.concatenate([features, docfeats[None, :]], axis=0)
+                labels[-1].append(len(features) - 1)
+
+            num += 1
+
+    return features, labels
+
+
+def dcg(y_true, pi_pred, rank):
+    # print(pi_pred)
+    order = np.argsort(-pi_pred)
+    gain = np.take(y_true, order[:rank])
+    # print(gain)
+    discounts = np.log2(np.arange(len(gain)) + 2)
+    # print(gain / discounts)
+    # print(np.sum(gain / discounts), "\n\n\n")
+    return np.sum(gain / discounts)
+
+
+def ndcg(pi_pred, correct_idxs, rank=None):
+    n_q, n_d = len(correct_idxs), len(pi_pred)
+    y_true = np.zeros((n_q, n_d))
+    for i, query_idxs in enumerate(correct_idxs):
+        y_true[i, query_idxs] = 1  # for each query, 1s where its positive docs are
+
+    # print("score")
+    score = np.array([dcg(y_true[i], pi_pred, rank=rank) for i in range(n_q)])
+
+    # print("best")
+    ordering = np.arange(0, n_d)
+    best_score = np.array(
+        [
+            dcg(
+                np.concatenate((np.zeros(n_d - len(correct_idxs[i])), np.ones(len(correct_idxs[i])))),
+                ordering,
+                rank=rank,
+            )
+            for i in range(n_q)
+        ]
+    )
+    best_score[best_score == 0] = 1
+
+    ret = score / best_score
+    # print(ret.mean())
+    return ret
+
+
+if __name__ == "__main__":
+    metric = ndcg
+    if not os.path.exists("data/features.npy"):
+        doc_feats, correct_docs = get_features(num_features=None)
+        np.save("data/features.npy", doc_feats)
+        np.save("data/labels.npy", correct_docs)
+    else:
+        doc_feats = np.load("data/features.npy")
+        correct_docs = np.load("data/labels.npy")
+    print(doc_feats.shape, len(correct_docs))
+
+    P = np.ones(len(correct_docs)) / len(correct_docs)
+    weak_rankers = []
+    alpha = np.zeros(doc_feats.shape[1])
+
+    weak_ranker_score = []
+    for k in range(doc_feats.shape[1]):
+        weak_ranker_score.append(ndcg(doc_feats[:, k], correct_docs))
+
+    best_alpha = alpha
+    best_score = 0
+
+    used_feats = []
+    for _ in range(50):
+        best_avg = -np.inf
+        h = None
+        for feat, score in enumerate(weak_ranker_score):
+            if feat in used_feats:
+                continue
+            # print(score)
+            avg = np.dot(P, score)
+            if avg > best_avg:
+                h = {"feat": feat, "score": score}
+                best_avg = avg
+        if h is None:
+            break  # all features have been used
+        used_feats.append(h["feat"])
+
+        # print(P)
+        h["alpha"] = 0.5 * (np.log(np.dot(P, 1 + h["score"]) / np.dot(P, 1 - h["score"])))
+        weak_rankers.append(h)
+
+        alpha[h["feat"]] += h["alpha"]
+
+        # print(alpha)
+        predictions = np.dot(doc_feats, alpha)
+        # print(predictions)
+        score = ndcg(predictions, correct_docs)
+        new_P = np.exp(-score)
+        P = new_P / new_P.sum()
+
+        if score.mean() > best_score:
+            best_alpha = alpha.copy()
+            best_score = score.mean()
+        print(score.mean())
+        print(alpha)
+        print(P.min(), P.mean(), P.max())
+        print()
+
+    print(best_alpha)
+    print(best_score)
