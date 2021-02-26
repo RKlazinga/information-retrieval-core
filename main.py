@@ -1,4 +1,5 @@
 import argparse
+import csv
 import os.path
 
 from tqdm import tqdm
@@ -16,6 +17,7 @@ parser.add_argument("data", type=str)
 parser.add_argument("-num_docs", type=int, default=None)
 parser.add_argument("-threads", type=int, default=128)
 parser.add_argument("-reload", action="store_true")
+parser.add_argument("-interactive", action="store_true")
 parser.add_argument("-query", type=str, default=None)
 args = parser.parse_args()
 
@@ -74,9 +76,23 @@ def search(query):
 
 
 qp = QueryParser("body", schema=ix.schema)
-if args.query is not None:
-    search(args.query)
+
+if args.interactive:
+    if args.query is not None:
+        search(args.query)
+    else:
+        while True:
+            query = input("query: ")
+            search(query)
 else:
-    while True:
-        query = input("query: ")
-        search(query)
+    run_id = "okapi"
+    pbar = tqdm(total=200)
+    with open("data/msmarco-test2019-queries.tsv", "rt", encoding="utf8") as f, open(
+        "okapi-predictions.trec", "w"
+    ) as out:
+        for qid, query in csv.reader(f, delimiter="\t"):
+            with ix.searcher(weighting=okapi.weighting) as s:
+                results = s.search(qp.parse(query), limit=25)
+                for rank, hit in enumerate(results):
+                    out.write(f"{qid} Q0 {hit['docid']} {rank + 1} {results.score(rank)} {run_id}\n")
+            pbar.update(1)
