@@ -103,7 +103,7 @@ def generate_triples(outfile, triples_to_generate):
                 return stats
 
 
-stats = generate_triples("triples.tsv", 1000)
+stats = generate_triples("triples.tsv", 10000)
 
 for key, val in stats.items():
     print(f"{key}\t{val}")

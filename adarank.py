@@ -9,7 +9,7 @@ from whoosh import index, writing
 from whoosh.filedb.filestore import FileStorage
 
 
-def get_features():
+def get_features(num_features=None):
     stem = whoosh.analysis.StemmingAnalyzer()
 
     triples = pd.read_csv(
@@ -27,7 +27,10 @@ def get_features():
     labels = []
     wfdoc, idf, wfcorp = {}, {}, {}
 
+    num = 0
     for idx, (_, query, _, _, _, pos, _, _, _, neg) in tqdm(triples.iterrows()):
+        if num_features is not None and num > num_features:
+            break
         try:
             query = [token.text for token in stem(query)]
 
@@ -54,6 +57,7 @@ def get_features():
                     docfeats[6] = np.log(docfeats[6])
 
                 features = np.concatenate([features, docfeats[None, :]], axis=0)
+                num += 1
 
                 if i == 1:  # we've added a positively labeled doc
                     labels.append(features.shape[0] - 1)
@@ -66,10 +70,14 @@ def get_features():
     return features, np.array(labels)
 
 
-def dcg(y_true, y_pred, rank=None):
+def dcg(y_true, y_pred, rank):
+    # print(y_pred)
     order = np.argsort(-y_pred)
     gain = np.take(y_true, order[:rank])
+    # print(gain)
     discounts = np.log2(np.arange(len(gain)) + 2)
+    # print(gain / discounts)
+    # print(np.sum(gain / discounts), "\n\n\n")
     return np.sum(gain / discounts)
 
 
@@ -77,35 +85,43 @@ def ndcg(y_pred, correct_idxs, rank=None):
     n_q, n_d = len(correct_idxs), len(y_pred)
     y_true = np.zeros((n_q, n_d))
     y_true[np.arange(n_q), correct_idxs] = 1  # for each query, a single 1 where its positive doc is
+
+    # print("score")
     score = np.array([dcg(y_true[i], y_pred, rank=rank) for i in range(n_q)])
+
+    # print("best")
     best_score = np.array([dcg(np.sort(y_true[i]), np.arange(0, n_d), rank=rank) for i in range(n_q)])
     best_score[best_score == 0] = 1
+
     ret = score / best_score
-    print(ret.mean())
+    # print(ret.mean())
     return ret
 
 
 if __name__ == "__main__":
     metric = ndcg
-    if not os.path.exists("data/features.npy"):
-        doc_feats, correct_docs = get_features()
-        np.save("data/features.npy", doc_feats)
-        np.save("data/labels.npy", correct_docs)
-    else:
-        doc_feats = np.load("data/features.npy")
-        correct_docs = np.load("data/labels.npy")
+    # if not os.path.exists("data/features.npy"):
+    doc_feats, correct_docs = get_features(num_features=None)
+    np.save("data/features.npy", doc_feats)
+    np.save("data/labels.npy", correct_docs)
+    # else:
+    #     doc_feats = np.load("data/features.npy")
+    #     correct_docs = np.load("data/labels.npy")
 
     y = correct_docs
 
     print(doc_feats.shape, correct_docs.shape)
 
     P = np.ones(len(correct_docs)) / len(correct_docs)
-    weak_rankers = []binary
+    weak_rankers = []
     alpha = np.zeros(doc_feats.shape[1])
 
     weak_ranker_score = []
     for k in range(doc_feats.shape[1]):
         weak_ranker_score.append(ndcg(doc_feats[:, k], correct_docs))
+
+    best_alpha = alpha
+    best_score = 0
 
     used_feats = []
     for _ in range(50):
@@ -130,3 +146,11 @@ if __name__ == "__main__":
         score = ndcg(np.dot(doc_feats, alpha), correct_docs)
         new_P = np.exp(-score)
         P = new_P / new_P.sum()
+
+        if score.mean() > best_score:
+            best_alpha = alpha.copy()
+            best_score = score.mean()
+        print(score.mean(), alpha)
+
+    print(best_alpha)
+    print(best_score)
