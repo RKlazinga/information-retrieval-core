@@ -1,23 +1,49 @@
-import os
+import csv
+import random
 
 import numpy as np
 import pandas as pd
 import whoosh.analysis
 import whoosh.scoring
 from tqdm import tqdm
-from whoosh import index, writing
 from whoosh.filedb.filestore import FileStorage
+
+
+training_set_size = 1000
+
+
+# The query string for each topicid is querystring[topicid]
+querystring = {}
+with open("data/msmarco-doctrain-queries.tsv", "rt", encoding="utf8") as f:
+    tsvreader = csv.reader(f, delimiter="\t")
+    for [topicid, querystring_of_topicid] in tsvreader:
+        querystring[topicid] = querystring_of_topicid
+
+
+# For each topicid, the list of positive docids is qrel[topicid]
+qrel = {}
+with open("data/msmarco-doctrain-qrels.tsv", "rt", encoding="utf8") as f:
+    tsvreader = csv.reader(f, delimiter=" ")
+    for [topicid, _, docid, rel] in tsvreader:
+        assert rel == "1"
+        if topicid in qrel:
+            qrel[topicid].append(docid)
+        else:
+            qrel[topicid] = [docid]
 
 
 def get_features(num_features=None):
     stem = whoosh.analysis.StemmingAnalyzer()
 
-    triples = pd.read_csv(
-        "data/triples.tsv",
-        sep="\t",
-        names=["topic", "query", "pos1", "pos2", "pos3", "pos4", "not1", "not2", "not3", "not4"],
-    )
-    print(triples)
+    positive_topics = random.choices(list(querystring.keys()), k=training_set_size)
+    positive_samples = {topic: (querystring[topic], qrel[topic]) for topic in positive_topics}
+
+    # triples = pd.read_csv(
+    #     "data/triples.tsv",
+    #     sep="\t",
+    #     names=["topic", "query", "pos1", "pos2", "pos3", "pos4", "not1", "not2", "not3", "not4"],
+    # )
+    # print(triples)
 
     ix = FileStorage("data/quickidx").open_index().reader()
     ndocs = ix.doc_count_all()
@@ -28,13 +54,14 @@ def get_features(num_features=None):
     wfdoc, idf, wfcorp = {}, {}, {}
 
     num = 0
-    for idx, (_, query, _, _, _, pos, _, _, _, neg) in tqdm(triples.iterrows()):
+    for idx, (query, positives) in tqdm(positive_samples.items()):
         if num_features is not None and num > num_features:
             break
         try:
             query = [token.text for token in stem(query)]
 
-            for i, doc in enumerate([neg] + [pos]):
+            labels.append([])
+            for i, doc in enumerate(positives):
                 doc = [token.text for token in stem(doc)]
                 intersection = set(query) & set(doc)
                 docfeats = np.zeros(7)
@@ -59,13 +86,11 @@ def get_features(num_features=None):
                 features = np.concatenate([features, docfeats[None, :]], axis=0)
                 num += 1
 
-                if i == 1:  # we've added a positively labeled doc
-                    labels.append(features.shape[0] - 1)
+                labels[-1].append(i)
         except:
             print("\n\n\nERRROR")
             print("query", query)
-            print("pos", pos)
-            print("neg", neg)
+            print("pos", positives)
 
     return features, np.array(labels)
 
@@ -84,7 +109,7 @@ def dcg(y_true, y_pred, rank):
 def ndcg(y_pred, correct_idxs, rank=None):
     n_q, n_d = len(correct_idxs), len(y_pred)
     y_true = np.zeros((n_q, n_d))
-    y_true[np.arange(n_q), correct_idxs] = 1  # for each query, a single 1 where its positive doc is
+    y_true[correct_idxs] = 1  # for each query, a single 1 where its positive doc is
 
     # print("score")
     score = np.array([dcg(y_true[i], y_pred, rank=rank) for i in range(n_q)])
