@@ -4,12 +4,13 @@ import random
 
 import numpy as np
 import pandas as pd
+import sklearn.metrics
 import whoosh.analysis
 import whoosh.scoring
 from tqdm import tqdm
 from whoosh.filedb.filestore import FileStorage
 
-training_set_size = 5000
+training_set_size = 2500
 
 
 # The query string for each topicid is querystring[topicid]
@@ -59,24 +60,17 @@ def get_features(num_features=None):
     positive_topics = random.choices(list(querystring.keys()), k=training_set_size)
     positive_samples = {topic: (querystring[topic], qrel[topic]) for topic in positive_topics}
 
-    # triples = pd.read_csv(
-    #     "data/triples.tsv",
-    #     sep="\t",
-    #     names=["topic", "query", "pos1", "pos2", "pos3", "pos4", "not1", "not2", "not3", "not4"],
-    # )
-    # print(triples)
-
-    ix = FileStorage("data/quickidx").open_index().reader()
+    ix = FileStorage("/HDDs/msmarco").open_index().reader()
     ndocs = ix.doc_count_all()
     avg_doc_len = ix.field_length("body") / ndocs
 
     features = np.array([[], [], [], [], [], [], []]).T
     labels = []
-    wfdoc, idf, wfcorp = {}, {}, {}
+    idf, wfcorp = {}, {}
 
     num = 0
     with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as f:
-        for idx, (query, positives) in tqdm(positive_samples.items()):
+        for _, (query, positives) in tqdm(positive_samples.items()):
             if num_features is not None and num > num_features:
                 break
 
@@ -92,17 +86,17 @@ def get_features(num_features=None):
                 docfeats = np.zeros(7, dtype=np.float64)
 
                 for term in intersection:
-                    if term not in wfdoc:
-                        wfdoc[term] = body.count(term)
+                    wfdoc = body.count(term)
+                    if term not in idf:
                         idf[term] = np.log(ndocs / (ix.doc_frequency("body", term) + 1e-8))
                         wfcorp[term] = ix.frequency("body", term) + 1e-8
 
-                    docfeats[0] += np.log(wfdoc[term] + 1)
+                    docfeats[0] += np.log(wfdoc + 1)
                     docfeats[1] += np.log(idf[term])
-                    docfeats[2] += np.log(wfdoc[term] / len(body) * idf[term] + 1)
+                    docfeats[2] += np.log(wfdoc / len(body) * idf[term] + 1)
                     docfeats[3] += np.log(ndocs / wfcorp[term] + 1)
-                    docfeats[4] += np.log(wfdoc[term] / len(body) + 1)
-                    docfeats[5] += np.log(wfdoc[term] * ndocs / (len(body) * wfcorp[term]) + 1)
+                    docfeats[4] += np.log(wfdoc / len(body) + 1)
+                    docfeats[5] += np.log(wfdoc * ndocs / (len(body) * wfcorp[term]) + 1)
                     docfeats[6] += whoosh.scoring.bm25(idf[term], wfcorp[term], len(body), avg_doc_len, B=0.75, K1=1.2)
 
                 if len(intersection) > 0:
@@ -119,7 +113,7 @@ def get_features(num_features=None):
 def dcg(y_true, pi_pred, rank):
     # print(pi_pred)
     order = np.argsort(-pi_pred)
-    gain = np.take(y_true, order[:rank])
+    gain = y_true[order[:rank]]
     # print(gain)
     discounts = np.log2(np.arange(len(gain)) + 2)
     # print(gain / discounts)
@@ -155,16 +149,26 @@ def ndcg(pi_pred, correct_idxs, rank=None):
     return ret
 
 
+def precision(pi_pred, correct_idxs, rank=None):
+    n_q, n_d = len(correct_idxs), len(pi_pred)
+    y_true = np.zeros((n_q, n_d))
+    y_pred = np.zeros_like(y_true)
+
+    scores = []
+    order = np.argsort(-pi_pred)
+    for i, query_idxs in enumerate(correct_idxs):
+        y_true[i, query_idxs] = 1  # for each query, 1s where its positive docs are
+        y_pred = y_true[i, order]
+        target = np.concatenate((np.zeros(n_d - len(correct_idxs[i])), np.ones(len(correct_idxs[i]))))
+        scores.append(sklearn.metrics.precision_score(y_true=target, y_pred=y_pred[:rank]))
+
+    return np.array(scores)
+
+
 if __name__ == "__main__":
     metric = ndcg
-    if not os.path.exists("data/features.npy"):
-        doc_feats, correct_docs = get_features(num_features=None)
-        np.save("data/features.npy", doc_feats)
-        np.save("data/labels.npy", correct_docs)
-    else:
-        doc_feats = np.load("data/features.npy")
-        correct_docs = np.load("data/labels.npy")
-    print(doc_feats.shape, len(correct_docs))
+
+    doc_feats, correct_docs = get_features(num_features=None)
 
     P = np.ones(len(correct_docs)) / len(correct_docs)
     weak_rankers = []
@@ -172,7 +176,7 @@ if __name__ == "__main__":
 
     weak_ranker_score = []
     for k in range(doc_feats.shape[1]):
-        weak_ranker_score.append(ndcg(doc_feats[:, k], correct_docs))
+        weak_ranker_score.append(metric(doc_feats[:, k], correct_docs))
 
     best_alpha = alpha
     best_score = 0
@@ -202,7 +206,7 @@ if __name__ == "__main__":
         # print(alpha)
         predictions = np.dot(doc_feats, alpha)
         # print(predictions)
-        score = ndcg(predictions, correct_docs)
+        score = metric(predictions, correct_docs)
         new_P = np.exp(-score)
         P = new_P / new_P.sum()
 
@@ -216,3 +220,4 @@ if __name__ == "__main__":
 
     print(best_alpha)
     print(best_score)
+    np.save("adarank.npy", best_alpha)

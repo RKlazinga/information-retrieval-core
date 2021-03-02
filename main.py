@@ -2,7 +2,12 @@ import argparse
 import csv
 import os.path
 
+import joblib
+import numpy as np
+import whoosh
+import whoosh.scoring
 from tqdm import tqdm
+from tqdm.contrib.concurrent import process_map
 from whoosh import index, writing
 from whoosh.analysis import StemmingAnalyzer
 from whoosh.fields import ID, TEXT, Schema
@@ -14,6 +19,7 @@ import okapi
 
 parser = argparse.ArgumentParser()
 parser.add_argument("data", type=str)
+parser.add_argument("model", type=str)
 parser.add_argument("-num_docs", type=int, default=None)
 parser.add_argument("-threads", type=int, default=128)
 parser.add_argument("-reload", action="store_true")
@@ -28,7 +34,7 @@ schema = Schema(
     body=TEXT(analyzer=StemmingAnalyzer()),
 )
 
-index_dir = "data/msmarco" if args.num_docs is None else "data/quickidx"
+index_dir = "/HDDs/msmarco" if args.num_docs is None else "data/quickidx"
 if not os.path.exists(index_dir):
     os.mkdir(index_dir)
     index.create_in(index_dir, schema)
@@ -58,41 +64,135 @@ if args.reload:
 
     [w.commit() for w in writers]
 
+# In the corpus tsv, each docid occurs at offset docoffset[docid]
+docoffset = {}
+with open("data/msmarco-docs-lookup.tsv", "rt", encoding="utf8") as f:
+    tsvreader = csv.reader(f, delimiter="\t")
+    for [docid, _, offset] in tsvreader:
+        docoffset[docid] = int(offset)
 
-def search(query):
-    q = qp.parse(query)
 
-    print("OKAPI")
-    with ix.searcher(weighting=okapi.weighting) as s:
-        results = s.search(q, terms=True)
-        for hit in results:
-            print(hit, hit.matched_terms())
-
-    print("\nBM25F")
-    with ix.searcher() as s:
-        results = s.search(q, terms=True)
-        for hit in results:
-            print(hit, hit.matched_terms())
+def getbody(docid, f):
+    f.seek(docoffset[docid])
+    line = f.readline()
+    assert line.startswith(docid + "\t"), f"Looking for {docid}, found {line}"
+    linelist = line.rstrip().split("\t")
+    if len(linelist) == 4:
+        return linelist[3]
 
 
 qp = QueryParser("body", schema=ix.schema)
 
 if args.interactive:
+
+    def interactive_search(query):
+        q = qp.parse(query)
+
+        print("OKAPI")
+        with ix.searcher(weighting=okapi.weighting) as s:
+            results = s.search(q, terms=True)
+            for hit in results:
+                print(hit, hit.matched_terms())
+
+        print("\nBM25F")
+        with ix.searcher() as s:
+            results = s.search(q, terms=True)
+            for hit in results:
+                print(hit, hit.matched_terms())
+
     if args.query is not None:
-        search(args.query)
+        interactive_search(args.query)
     else:
         while True:
             query = input("query: ")
-            search(query)
-else:
-    run_id = "okapi"
-    pbar = tqdm(total=200)
-    with open("data/msmarco-test2019-queries.tsv", "rt", encoding="utf8") as f, open(
-        "okapi-predictions.trec", "w"
-    ) as out:
-        for qid, query in csv.reader(f, delimiter="\t"):
-            with ix.searcher(weighting=okapi.weighting) as s:
-                results = s.search(qp.parse(query), limit=25)
-                for rank, hit in enumerate(results):
-                    out.write(f"{qid} Q0 {hit['docid']} {rank + 1} {results.score(rank)} {run_id}\n")
-            pbar.update(1)
+            interactive_search(query)
+    exit(0)
+
+run_id = args.model
+if args.model == "svm":
+    svm = joblib.load("svm.pkl")
+elif args.model == "adarank":
+    alpha = np.load("adarank.npy")
+
+ndocs = ix.doc_count_all()
+avg_doc_len = ix.field_length("body") / ndocs
+idf, wfcorp = {}, {}
+stem = StemmingAnalyzer()
+
+
+def predict(inp):
+    qid, query = inp
+    ret = []
+
+    if args.model == "okapi" or args.model == "bm25":
+        results = s.search(qp.parse(query), limit=25)
+        for rank, hit in enumerate(results):
+            ret.append(qid, hit["docid"], rank + 1, results.score(rank), run_id)
+
+    if args.model == "svm" or args.model == "adarank":
+        features = []
+        results = s.search(qp.parse(query), limit=100)
+        query = [token.text for token in stem(query)]
+
+        docids = []
+        for rank, hit in enumerate(results):
+            docids.append(hit["docid"])
+            body = getbody(hit["docid"], docs)
+            body = [token.text for token in stem(body)]
+            intersection = set(query) & set(body)
+            docfeats = np.zeros(7, dtype=np.float64)
+            for term in intersection:
+                wfdoc = body.count(term)
+                if term not in idf:
+                    idf[term] = np.log(ndocs / (r.doc_frequency("body", term) + 1e-8))
+                    wfcorp[term] = r.frequency("body", term) + 1e-8
+
+                docfeats[0] += np.log(wfdoc + 1)
+                docfeats[1] += np.log(idf[term])
+                docfeats[2] += np.log(wfdoc / len(body) * idf[term] + 1)
+                docfeats[3] += np.log(ndocs / wfcorp[term] + 1)
+                docfeats[4] += np.log(wfdoc / len(body) + 1)
+                docfeats[5] += np.log(wfdoc * ndocs / (len(body) * wfcorp[term]) + 1)
+                docfeats[6] += whoosh.scoring.bm25(idf[term], wfcorp[term], len(body), avg_doc_len, B=0.75, K1=1.2)
+
+            if len(intersection) > 0:
+                docfeats[6] = np.log(docfeats[6])
+
+            features.append(docfeats)
+        features = np.array(features)
+
+        try:
+            if args.model == "adarank":
+                relevance = np.dot(features, alpha)
+                ordering = np.argsort(relevance)
+            else:
+                relevance = svm.predict(features)
+                ordering = np.argsort(relevance)
+
+            for rank, idx in enumerate(ordering[:25]):
+                if relevance[idx] != 0:
+                    ret.append([qid, docids[idx], rank + 1, relevance[idx], run_id])
+        except:
+            print(qid, query, features)
+
+    return ret
+
+
+with open("data/msmarco-test2019-queries.tsv", "rt", encoding="utf8") as f, open(
+    f"{args.model}-predictions.trec", "w"
+) as out, open("data/msmarco-docs.tsv", "rt", encoding="utf8") as docs:
+
+    queries = []
+    for qid, query in csv.reader(f, delimiter="\t"):
+        queries.append([qid, query])
+
+    print(f"Prediction {len(queries)} queries with {args.model}...")
+    with ix.searcher(weighting=okapi.weighting if args.model == "okapi" else whoosh.scoring.BM25F) as s:
+        r = ix.reader()
+        querydocrankings = []
+        for query in tqdm(queries):
+            querydocrankings.append(predict(query))
+
+    for querydocs in querydocrankings:
+        for qid, docid, rank, score, run_id in querydocs:
+            out.write(f"{qid} Q0 {docid} {rank} {score} {run_id}\n")
