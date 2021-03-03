@@ -9,6 +9,7 @@ import whoosh.analysis
 import whoosh.scoring
 from tqdm import tqdm
 from whoosh.filedb.filestore import FileStorage
+from util import features_per_doc, getbody
 
 training_set_size = 2500
 
@@ -33,27 +34,6 @@ with open("data/msmarco-doctrain-qrels.tsv", "rt", encoding="utf8") as f:
             qrel[topicid] = [docid]
 
 
-# In the corpus tsv, each docid occurs at offset docoffset[docid]
-docoffset = {}
-with open("data/msmarco-docs-lookup.tsv", "rt", encoding="utf8") as f:
-    tsvreader = csv.reader(f, delimiter="\t")
-    for [docid, _, offset] in tsvreader:
-        docoffset[docid] = int(offset)
-
-
-def getbody(docid, f):
-    """getcontent(docid, f) will get content for a given docid (a string) from filehandle f.
-    The content has four tab-separated strings: docid, url, title, body.
-    """
-
-    f.seek(docoffset[docid])
-    line = f.readline()
-    assert line.startswith(docid + "\t"), f"Looking for {docid}, found {line}"
-    linelist = line.rstrip().split("\t")
-    if len(linelist) == 4:
-        return linelist[3]
-
-
 def get_features(num_features=None):
     stem = whoosh.analysis.StemmingAnalyzer()
 
@@ -61,12 +41,9 @@ def get_features(num_features=None):
     positive_samples = {topic: (querystring[topic], qrel[topic]) for topic in positive_topics}
 
     ix = FileStorage("/HDDs/msmarco").open_index().reader()
-    ndocs = ix.doc_count_all()
-    avg_doc_len = ix.field_length("body") / ndocs
 
     features = np.array([[], [], [], [], [], [], []]).T
     labels = []
-    idf, wfcorp = {}, {}
 
     num = 0
     with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as f:
@@ -82,25 +59,8 @@ def get_features(num_features=None):
                 if body is None:
                     continue
                 body = [token.text for token in stem(body)]
-                intersection = set(query) & set(body)
-                docfeats = np.zeros(7, dtype=np.float64)
 
-                for term in intersection:
-                    wfdoc = body.count(term)
-                    if term not in idf:
-                        idf[term] = np.log(ndocs / (ix.doc_frequency("body", term) + 1e-8))
-                        wfcorp[term] = ix.frequency("body", term) + 1e-8
-
-                    docfeats[0] += np.log(wfdoc + 1)
-                    docfeats[1] += np.log(idf[term])
-                    docfeats[2] += np.log(wfdoc / len(body) * idf[term] + 1)
-                    docfeats[3] += np.log(ndocs / wfcorp[term] + 1)
-                    docfeats[4] += np.log(wfdoc / len(body) + 1)
-                    docfeats[5] += np.log(wfdoc * ndocs / (len(body) * wfcorp[term]) + 1)
-                    docfeats[6] += whoosh.scoring.bm25(idf[term], wfcorp[term], len(body), avg_doc_len, B=0.75, K1=1.2)
-
-                if len(intersection) > 0:
-                    docfeats[6] = np.log(docfeats[6])
+                docfeats = features_per_doc(query, body, ix)
 
                 features = np.concatenate([features, docfeats[None, :]], axis=0)
                 labels[-1].append(len(features) - 1)
@@ -220,4 +180,4 @@ if __name__ == "__main__":
 
     print(best_alpha)
     print(best_score)
-    np.save("adarank.npy", best_alpha)
+    np.save("ada.npy", best_alpha)

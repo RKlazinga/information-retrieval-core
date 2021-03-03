@@ -10,6 +10,7 @@ from whoosh.filedb.filestore import FileStorage
 from sklearn import svm
 from sklearn.model_selection import train_test_split
 import joblib
+from util import features_per_doc
 
 
 def get_features():
@@ -27,7 +28,6 @@ def get_features():
 
     features = np.array([[], [], [], [], [], [], []]).T
     labels = []
-    idf, wfcorp = {}, {}
 
     for idx, (_, query, _, _, _, pos, _, _, _, neg) in tqdm(triples.iterrows()):
         try:
@@ -35,25 +35,8 @@ def get_features():
 
             for i, doc in enumerate([neg] + [pos]):
                 doc = [token.text for token in stem(doc)]
-                intersection = set(query) & set(doc)
-                docfeats = np.zeros(7)
 
-                for term in intersection:
-                    wfdoc = doc.count(term)
-                    if term not in idf:
-                        idf[term] = np.log(ndocs / (ix.doc_frequency("body", term) + 1e-8))
-                        wfcorp[term] = ix.frequency("body", term) + 1e-8
-
-                    docfeats[0] += np.log(wfdoc + 1)
-                    docfeats[1] += np.log(idf[term])
-                    docfeats[2] += np.log(wfdoc / len(doc) * idf[term] + 1)
-                    docfeats[3] += np.log(ndocs / wfcorp[term] + 1)
-                    docfeats[4] += np.log(wfdoc / len(doc) + 1)
-                    docfeats[5] += np.log(wfdoc * ndocs / (len(doc) * wfcorp[term]) + 1)
-                    docfeats[6] += whoosh.scoring.bm25(idf[term], wfcorp[term], len(doc), avg_doc_len, B=0.75, K1=1.2)
-
-                if len(intersection) > 0:
-                    docfeats[6] = np.log(docfeats[6])
+                docfeats = features_per_doc(query, doc, ix)
 
                 features = np.concatenate([features, docfeats[None, :]], axis=0)
 
