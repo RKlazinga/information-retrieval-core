@@ -46,7 +46,7 @@ def predict(inp):
     ret = []
 
     if args.model == "okapi" or args.model == "bm25":
-        results = SEARCHER.search(qp.parse(query), limit=25)
+        results = SEARCHER.search(qp.parse(query), limit=args.preselection)
         for rank, hit in enumerate(results):
             ret.append([qid, hit["docid"], rank + 1, results.score(rank), run_id])
 
@@ -86,9 +86,9 @@ def predict(inp):
 
 
 # filter out the test queries which actually have qrels to evaluate with trec_eval
-with open("2019qrels-docs.txt", "rt", encoding="utf8") as f:
+with open("data/2019qrels-docs.txt", "rt", encoding="utf8") as f:
     testedqueries = []
-    for id, quer in csv.reader(f, delimiter="\t"):
+    for id, _, docid, rel in csv.reader(f, delimiter=" "):
         testedqueries.append(id)
 with open("data/msmarco-test2019-queries.tsv", "rt", encoding="utf8") as f:
     queries = []
