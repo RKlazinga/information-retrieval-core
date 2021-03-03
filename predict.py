@@ -17,6 +17,7 @@ from util import features_per_doc, getbody
 
 parser = argparse.ArgumentParser()
 parser.add_argument("model", type=str, choices=["bm25", "okapi", "svm", "adarank"])
+parser.add_argument("-preselection", type=int, default=50)
 args = parser.parse_args()
 
 ix = FileStorage("data/msmarcoidx").open_index()
@@ -47,7 +48,7 @@ def predict(inp):
             ret.append([qid, hit["docid"], rank + 1, results.score(rank), run_id])
 
     if args.model == "svm" or args.model == "adarank":
-        results = SEARCHER.search(qp.parse(query), limit=1000)
+        results = SEARCHER.search(qp.parse(query), limit=args.preselection)
         query = [token.text for token in stem(query)]
 
         docids = []
@@ -82,7 +83,7 @@ with open("data/msmarco-test2019-queries.tsv", "rt", encoding="utf8") as f:
 
 print(f"Predicting {len(queries)} queries with {args.model}...")
 querydocrankings = []
-with ix.searcher(weighting=okapi.weighting if args.model == "okapi" else whoosh.scoring.BM25F) as SEARCHER:
+with ix.searcher(weighting=whoosh.scoring.BM25F if args.model == "bm25" else okapi.weighting) as SEARCHER:
     with mp.Pool(processes=24, initializer=openfilesearcher) as pool:
         with tqdm(total=len(queries)) as pbar:
             for i, qdr in enumerate(pool.imap_unordered(predict, queries)):
