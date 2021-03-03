@@ -1,18 +1,15 @@
 import argparse
 import csv
-import os.path
 
 import joblib
 import numpy as np
 import whoosh
 import whoosh.scoring
 from tqdm import tqdm
-from whoosh import index, writing
+from whoosh import writing
 from whoosh.analysis import StemmingAnalyzer
-from whoosh.fields import ID, TEXT, Schema
 from whoosh.filedb.filestore import FileStorage
 from whoosh.qparser import QueryParser
-from whoosh.writing import AsyncWriter
 
 import okapi
 from util import features_per_doc, getbody
