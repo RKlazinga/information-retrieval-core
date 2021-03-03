@@ -7,7 +7,7 @@ Hans Brouwer (@JCBrouwer)
 ### To reproduce results presented in our report:
 
 ```language=bash
-mkdir data output
+mkdir data
 
 cd data
 # download the MSMARCO 2019 dataset (this will take a while)
