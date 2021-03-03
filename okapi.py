@@ -43,7 +43,7 @@ class OkapiWeighting(whoosh.scoring.WeightingModel):
             return self.bm25(numdocs, df, freq_in_doc, length, avg_length)
 
         def max_quality(self):
-            return 1
+            return 10000
 
 
 weighting = OkapiWeighting()

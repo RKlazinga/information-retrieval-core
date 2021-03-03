@@ -6,6 +6,7 @@ import numpy as np
 import whoosh
 import whoosh.scoring
 from tqdm import tqdm
+from tqdm.contrib.concurrent import process_map
 from whoosh.analysis import StemmingAnalyzer
 from whoosh.filedb.filestore import FileStorage
 from whoosh.qparser import QueryParser
@@ -17,7 +18,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("model", type=str, choices=["bm25", "okapi", "svm", "adarank"])
 args = parser.parse_args()
 
-ix = FileStorage("/HDDs/msmarco").open_index()
+ix = FileStorage("data/msmarcoidx").open_index()
 qp = QueryParser("body", schema=ix.schema)
 
 run_id = args.model
@@ -78,9 +79,7 @@ with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as DOCSFILE, ix.search
     weighting=okapi.weighting if args.model == "okapi" else whoosh.scoring.BM25F
 ) as SEARCHER:
     print(f"Predicting {len(queries)} queries with {args.model}...")
-    querydocrankings = []
-    for q in tqdm(queries):
-        querydocrankings.append(predict(q))
+    querydocrankings = process_map(predict, queries, max_workers=4)
 
 with open(f"output/{args.model}-predictions.trec", "w") as out:
     for querydocs in querydocrankings:

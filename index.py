@@ -10,9 +10,8 @@ from whoosh.writing import AsyncWriter
 
 parser = argparse.ArgumentParser()
 parser.add_argument("data", type=str)
-parser.add_argument("model", type=str)
 parser.add_argument("-num_docs", type=int, default=None)
-parser.add_argument("-threads", type=int, default=128)
+parser.add_argument("-threads", type=int, default=1)  # seems using more than 1 thread may be broken?
 parser.add_argument("-reload", action="store_true")
 args = parser.parse_args()
 
@@ -23,7 +22,7 @@ schema = Schema(
     body=TEXT(analyzer=StemmingAnalyzer()),
 )
 
-index_dir = "/HDDs/msmarco" if args.num_docs is None else "data/quickidx"
+index_dir = "data/msmarcoidx" if args.num_docs is None else "data/quickidx"
 if not os.path.exists(index_dir):
     os.mkdir(index_dir)
     index.create_in(index_dir, schema)

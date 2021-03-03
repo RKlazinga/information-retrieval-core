@@ -1,8 +1,4 @@
 import argparse
-import os.path
-
-from whoosh.analysis import StemmingAnalyzer
-from whoosh.fields import ID, TEXT, Schema
 from whoosh.filedb.filestore import FileStorage
 from whoosh.qparser import QueryParser
 
@@ -12,7 +8,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-query", type=str, default=None)
 args = parser.parse_args()
 
-ix = FileStorage("/HDDs/msmarco").open_index()
+ix = FileStorage("data/msmarcoidx").open_index()
 qp = QueryParser("body", schema=ix.schema)
 
 
@@ -32,6 +28,8 @@ def interactive_search(query):
             print(hit, hit.matched_terms())
 
 
+args.query = "shipping"
+print(args.query)
 if args.query is not None:
     interactive_search(args.query)
 else:

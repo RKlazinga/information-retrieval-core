@@ -19,7 +19,7 @@ def get_features():
         sep="\t",
         names=["topic", "query", "pos1", "pos2", "pos3", "pos4", "not1", "not2", "not3", "not4"],
     )[:100]
-    ix = FileStorage("/HDDs/msmarco").open_index().reader()
+    ix = FileStorage("data/msmarcoidx").open_index().reader()
 
     features = np.array([[], [], [], [], [], [], []]).T
     labels = []

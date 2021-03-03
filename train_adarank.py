@@ -40,7 +40,7 @@ def get_features(num_features=None):
     positive_topics = random.choices(list(querystring.keys()), k=training_set_size)
     positive_samples = {topic: (querystring[topic], qrel[topic]) for topic in positive_topics}
 
-    ix = FileStorage("/HDDs/msmarco").open_index().reader()
+    ix = FileStorage("data/msmarcoidx").open_index().reader()
 
     features = np.array([[], [], [], [], [], [], []]).T
     labels = []
