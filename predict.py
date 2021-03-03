@@ -18,6 +18,7 @@ from util import features_per_doc, getbody
 parser = argparse.ArgumentParser()
 parser.add_argument("model", type=str, choices=["bm25", "okapi", "svm", "adarank"])
 parser.add_argument("-preselection", type=int, default=50)
+parser.add_argument("-add_bm25", action="store_true")
 args = parser.parse_args()
 
 ix = FileStorage("data/msmarcoidx").open_index()
@@ -64,7 +65,9 @@ def predict(inp):
             if args.model == "adarank":
                 relevance = np.dot(features, alpha)
             else:
-                relevance = svm.predict(features) + features[:, -1] / 100
+                relevance = svm.predict(features)
+                if args.add_bm25:
+                    relevance += features[:, -1] / 100
             ordering = np.argsort(-relevance)
 
             for rank, idx in enumerate(ordering[:25]):
