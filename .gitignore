@@ -4,5 +4,5 @@ l2r/
 .vscode/
 __pycache__/
 *.pyc
-adarank.npy
 svm.pkl
+ada.npy

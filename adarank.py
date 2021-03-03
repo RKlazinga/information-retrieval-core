@@ -220,4 +220,4 @@ if __name__ == "__main__":
 
     print(best_alpha)
     print(best_score)
-    np.save("adarank.npy", best_alpha)
+    np.save("ada.npy", best_alpha)

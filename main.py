@@ -7,7 +7,6 @@ import numpy as np
 import whoosh
 import whoosh.scoring
 from tqdm import tqdm
-from tqdm.contrib.concurrent import process_map
 from whoosh import index, writing
 from whoosh.analysis import StemmingAnalyzer
 from whoosh.fields import ID, TEXT, Schema
@@ -112,7 +111,7 @@ run_id = args.model
 if args.model == "svm":
     svm = joblib.load("svm.pkl")
 elif args.model == "adarank":
-    alpha = np.load("adarank.npy")
+    alpha = np.load("ada.npy")
 
 ndocs = ix.doc_count_all()
 avg_doc_len = ix.field_length("body") / ndocs
