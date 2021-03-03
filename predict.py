@@ -17,7 +17,9 @@ from util import features_per_doc, getbody
 
 parser = argparse.ArgumentParser()
 parser.add_argument("model", type=str, choices=["bm25", "okapi", "svm", "adarank"])
+parser.add_argument("-svm_file", type=str, choices=["svm1k", "svm100k"], default="svm100k")
 parser.add_argument("-preselection", type=int, default=50)
+parser.add_argument("-binary", action="store_true")
 parser.add_argument("-add_bm25", action="store_true")
 args = parser.parse_args()
 
@@ -26,7 +28,7 @@ qp = QueryParser("body", schema=ix.schema)
 
 run_id = args.model
 if args.model == "svm":
-    svm = joblib.load("svm.pkl")
+    svm = joblib.load(f"{args.svm_file}.pkl")
 elif args.model == "adarank":
     alpha = np.load("ada.npy")
 
@@ -65,13 +67,17 @@ def predict(inp):
             if args.model == "adarank":
                 relevance = np.dot(features, alpha)
             else:
-                relevance = svm.predict(features)
+                if args.binary:
+                    relevance = svm.predict(features)
+                else:
+                    relevance = svm.decision_function(features)
                 if args.add_bm25:
                     relevance += features[:, -1] / 100
             ordering = np.argsort(-relevance)
 
             for rank, idx in enumerate(ordering[:25]):
-                ret.append([qid, docids[idx], rank + 1, relevance[idx], run_id])
+                if relevance[idx] != 0:
+                    ret.append([qid, docids[idx], rank + 1, relevance[idx], run_id])
 
         except:
             print("ERROR: query ", qid, query, " has no results ", results, features)
@@ -79,10 +85,16 @@ def predict(inp):
     return ret
 
 
+# filter out the test queries which actually have qrels to evaluate with trec_eval
+with open("2019qrels-docs.txt", "rt", encoding="utf8") as f:
+    testedqueries = []
+    for id, quer in csv.reader(f, delimiter="\t"):
+        testedqueries.append(id)
 with open("data/msmarco-test2019-queries.tsv", "rt", encoding="utf8") as f:
     queries = []
-    for qi, quer in csv.reader(f, delimiter="\t"):
-        queries.append([qi, quer])
+    for id, quer in csv.reader(f, delimiter="\t"):
+        if id in testedqueries:
+            queries.append([id, quer])
 
 print(f"Predicting {len(queries)} queries with {args.model}...")
 querydocrankings = []
