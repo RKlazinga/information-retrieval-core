@@ -6,7 +6,6 @@ import numpy as np
 import whoosh
 import whoosh.scoring
 from tqdm import tqdm
-from whoosh import writing
 from whoosh.analysis import StemmingAnalyzer
 from whoosh.filedb.filestore import FileStorage
 from whoosh.qparser import QueryParser
@@ -35,20 +34,20 @@ def predict(inp):
     ret = []
 
     if args.model == "okapi" or args.model == "bm25":
-        results = s.search(qp.parse(query), limit=25)
+        results = SEARCHER.search(qp.parse(query), limit=25)
         for rank, hit in enumerate(results):
             ret.append([qid, hit["docid"], rank + 1, results.score(rank), run_id])
 
     if args.model == "svm" or args.model == "adarank":
-        results = s.search(qp.parse(query), limit=1000)
+        results = SEARCHER.search(qp.parse(query), limit=1000)
         query = [token.text for token in stem(query)]
 
         docids = []
         features = []
         for rank, hit in enumerate(results):
-            body = [token.text for token in stem(getbody(hit["docid"], docsfile))]
+            body = [token.text for token in stem(getbody(hit["docid"], DOCSFILE))]
 
-            features.append(features_per_doc(query, body, r))
+            features.append(features_per_doc(query, body, SEARCHER))
             docids.append(hit["docid"])
         features = np.array(features)
 
@@ -69,21 +68,21 @@ def predict(inp):
     return ret
 
 
-with open("data/msmarco-test2019-queries.tsv", "rt", encoding="utf8") as f, open(
-    f"output/{args.model}-predictions.trec", "w"
-) as out, open("data/msmarco-docs.tsv", "rt", encoding="utf8") as docsfile, ix.searcher(
-    weighting=okapi.weighting if args.model == "okapi" else whoosh.scoring.BM25F
-) as s, ix.reader() as r:
-
+with open("data/msmarco-test2019-queries.tsv", "rt", encoding="utf8") as f:
     queries = []
-    for qid, query in csv.reader(f, delimiter="\t"):
-        queries.append([qid, query])
+    for qi, quer in csv.reader(f, delimiter="\t"):
+        queries.append([qi, quer])
 
+print("Loading documents file and whoosh searcher...")
+with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as DOCSFILE, ix.searcher(
+    weighting=okapi.weighting if args.model == "okapi" else whoosh.scoring.BM25F
+) as SEARCHER:
     print(f"Predicting {len(queries)} queries with {args.model}...")
     querydocrankings = []
-    for query in tqdm(queries):
-        querydocrankings.append(predict(query))
+    for q in tqdm(queries):
+        querydocrankings.append(predict(q))
 
+with open(f"output/{args.model}-predictions.trec", "w") as out:
     for querydocs in querydocrankings:
-        for qid, docid, rank, score, run_id in querydocs:
-            out.write(f"{qid} Q0 {docid} {rank} {score} {run_id}\n")
+        for q, docid, r, score, run_id in querydocs:
+            out.write(f"{q} Q0 {docid} {r} {score} {run_id}\n")

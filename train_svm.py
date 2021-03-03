@@ -18,13 +18,13 @@ def get_features():
         "data/triples.tsv",
         sep="\t",
         names=["topic", "query", "pos1", "pos2", "pos3", "pos4", "not1", "not2", "not3", "not4"],
-    )
+    )[:100]
     ix = FileStorage("/HDDs/msmarco").open_index().reader()
 
     features = np.array([[], [], [], [], [], [], []]).T
     labels = []
 
-    for _, (_, query, _, _, _, pos, _, _, _, neg) in tqdm(triples.iterrows()):
+    for _, (_, query, _, _, _, pos, _, _, _, neg) in tqdm(triples.iterrows(), total=len(triples)):
         try:
             query = [token.text for token in stem(query)]
             for i, doc in enumerate([neg] + [pos]):
@@ -43,9 +43,13 @@ def get_features():
 
 
 if __name__ == "__main__":
-    features, labels = get_features()
+    if not os.path.exists("data/svm-trainset.pkl"):
+        features, labels = get_features()
+        joblib.dump([features, labels], "data/svm-trainset.pkl")
+    else:
+        [features, labels] = joblib.load("data/svm-trainset.pkl")
 
-    trainX, testX, trainY, testY = train_test_split(features, labels, test_size=0.2)
+    trainX, testX, trainY, testY = train_test_split(features, labels, test_size=0.1)
 
     model = svm.SVC(max_iter=100_000).fit(trainX, trainY)
 

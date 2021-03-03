@@ -9,11 +9,11 @@ NDOCS = None
 AVG_DOC_LEN = None
 
 
-def features_per_doc(query: List, doc: List, reader):
+def features_per_doc(query: List, doc: List, searcher):
     global NDOCS, AVG_DOC_LEN
     if NDOCS is None:
-        NDOCS = reader.doc_count_all()
-        AVG_DOC_LEN = reader.field_length("body") / NDOCS
+        NDOCS = searcher.reader().doc_count_all()
+        AVG_DOC_LEN = searcher.reader().field_length("body") / NDOCS
 
     intersection = set(query) & set(doc)
     docfeats = np.zeros(7)
@@ -21,8 +21,8 @@ def features_per_doc(query: List, doc: List, reader):
     for term in intersection:
         wfdoc = doc.count(term)
         if term not in IDF:
-            IDF[term] = np.log(NDOCS / (reader.doc_frequency("body", term) + 1e-8))
-            WFCORP[term] = reader.frequency("body", term) + 1e-8
+            IDF[term] = np.log(NDOCS / (searcher.reader().doc_frequency("body", term) + 1e-8))
+            WFCORP[term] = searcher.reader().frequency("body", term) + 1e-8
 
         docfeats[0] += np.log(wfdoc + 1)
         docfeats[1] += np.log(IDF[term])
@@ -44,6 +44,7 @@ DOCOFFSET = None
 def getbody(docid, docsfile):
     global DOCOFFSET
     if DOCOFFSET is None:
+        print("Loading docoffset...")
         DOCOFFSET = {}
         with open("data/msmarco-docs-lookup.tsv", "rt", encoding="utf8") as f:
             tsvreader = csv.reader(f, delimiter="\t")

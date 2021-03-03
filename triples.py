@@ -1,27 +1,30 @@
 import csv
-import random
 import gzip
 import os
+import random
+import sys
 from collections import defaultdict
+
+from tqdm import tqdm
 
 # The query string for each topicid is querystring[topicid]
 querystring = {}
-with open("msmarco-doctrain-queries.tsv", "rt", encoding="utf8") as f:
+with open("data/msmarco-doctrain-queries.tsv", "rt", encoding="utf8") as f:
     tsvreader = csv.reader(f, delimiter="\t")
     for [topicid, querystring_of_topicid] in tsvreader:
         querystring[topicid] = querystring_of_topicid
 
 # In the corpus tsv, each docid occurs at offset docoffset[docid]
 docoffset = {}
-with open("msmarco-docs-lookup.tsv", "rt", encoding="utf8") as f:
+with open("data/msmarco-docs-lookup.tsv", "rt", encoding="utf8") as f:
     tsvreader = csv.reader(f, delimiter="\t")
     for [docid, _, offset] in tsvreader:
         docoffset[docid] = int(offset)
 
 # For each topicid, the list of positive docids is qrel[topicid]
 qrel = {}
-with open("msmarco-doctrain-qrels.tsv", "rt", encoding="utf8") as f:
-    tsvreader = csv.reader(f, delimiter="\t")
+with open("data/msmarco-doctrain-qrels.tsv", "rt", encoding="utf8") as f:
+    tsvreader = csv.reader(f, delimiter=" ")
     for [topicid, _, docid, rel] in tsvreader:
         assert rel == "1"
         if topicid in qrel:
@@ -58,8 +61,9 @@ def generate_triples(outfile, triples_to_generate):
     unjudged_rank_to_keep = random.randint(1, 100)
     already_done_a_triple_for_topicid = -1
 
-    with open("msmarco-doctrain-top100", "rt", encoding="utf8") as top100f, open(
-        "msmarco-docs.tsv", encoding="utf8"
+    pbar = tqdm(total=triples_to_generate)
+    with open("data/msmarco-doctrain-top100", "rt", encoding="utf8") as top100f, open(
+        "data/msmarco-docs.tsv", encoding="utf8"
     ) as f, open(outfile, "w", encoding="utf8") as out:
         for line in top100f:
             [topicid, _, unjudged_docid, rank, _, _] = line.split()
@@ -99,11 +103,12 @@ def generate_triples(outfile, triples_to_generate):
             )
 
             triples_to_generate -= 1
+            pbar.update(1)
             if triples_to_generate <= 0:
                 return stats
 
 
-stats = generate_triples("triples.tsv", 1000)
+stats = generate_triples("data/triples.tsv", int(sys.argv[1]))
 
 for key, val in stats.items():
     print(f"{key}\t{val}")
