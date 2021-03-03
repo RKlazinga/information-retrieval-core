@@ -7,13 +7,17 @@ Hans Brouwer (@JCBrouwer)
 ### To reproduce results presented in our report:
 
 ```language=bash
-mkdir data
 
-cd data
 # download the MSMARCO 2019 dataset (this will take a while)
-for url in https://trec.nist.gov/data/deep/2019qrels-docs.txt https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-doctest2019-top100.gz https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-test2019-queries.tsv.gz https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-doctrain-qrels.tsv.gz https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-doctrain-top100.gz https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-doctrain-queries.tsv.gz https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-docs-lookup.tsv.gz; do
-wget $url &
-done
+mkdir data
+cd data
+wget https://trec.nist.gov/data/deep/2019qrels-docs.txt &
+wget https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-doctest2019-top100.gz &
+wget https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-test2019-queries.tsv.gz &
+wget https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-doctrain-qrels.tsv.gz &
+wget https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-doctrain-top100.gz &
+wget https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-doctrain-queries.tsv.gz &
+wget https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-docs-lookup.tsv.gz &
 wget https://msmarco.blob.core.windows.net/msmarcoranking/msmarco-docs.tsv.gz
 gunzip *.gz
 cd ..
