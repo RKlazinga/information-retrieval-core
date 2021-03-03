@@ -28,7 +28,7 @@ class OkapiWeighting(whoosh.scoring.WeightingModel):
             Returns:
                 Okapi BM25 score
             """
-            return np.log(N / df) * ((k1 + 1) * tf) / (k1 * ((1 - b) + b * (l_d / l_avg)) + tf)
+            return np.log(N / df) * ((k1 + 1) * tf) / (k1 * ((1 - b) + b * l_d / l_avg) + tf)
 
         def score(self, matcher):
             docid = matcher.id()
