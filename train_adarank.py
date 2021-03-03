@@ -46,7 +46,7 @@ def get_features(num_features=None):
     labels = []
 
     num = 0
-    with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as f:
+    with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as docsfile:
         for _, (query, positives) in tqdm(positive_samples.items()):
             if num_features is not None and num > num_features:
                 break
@@ -55,7 +55,7 @@ def get_features(num_features=None):
 
             labels.append([])
             for i, docid in enumerate(positives):
-                body = getbody(docid, f)
+                body = getbody(docid, docsfile)
                 if body is None:
                     continue
                 body = [token.text for token in stem(body)]
@@ -71,13 +71,9 @@ def get_features(num_features=None):
 
 
 def dcg(y_true, pi_pred, rank):
-    # print(pi_pred)
     order = np.argsort(-pi_pred)
     gain = y_true[order[:rank]]
-    # print(gain)
     discounts = np.log2(np.arange(len(gain)) + 2)
-    # print(gain / discounts)
-    # print(np.sum(gain / discounts), "\n\n\n")
     return np.sum(gain / discounts)
 
 
@@ -87,10 +83,8 @@ def ndcg(pi_pred, correct_idxs, rank=None):
     for i, query_idxs in enumerate(correct_idxs):
         y_true[i, query_idxs] = 1  # for each query, 1s where its positive docs are
 
-    # print("score")
     score = np.array([dcg(y_true[i], pi_pred, rank=rank) for i in range(n_q)])
 
-    # print("best")
     ordering = np.arange(0, n_d)
     best_score = np.array(
         [
@@ -105,7 +99,6 @@ def ndcg(pi_pred, correct_idxs, rank=None):
     best_score[best_score == 0] = 1
 
     ret = score / best_score
-    # print(ret.mean())
     return ret
 
 
@@ -148,7 +141,6 @@ if __name__ == "__main__":
         for feat, score in enumerate(weak_ranker_score):
             if feat in used_feats:
                 continue
-            # print(score)
             avg = np.dot(P, score)
             if avg > best_avg:
                 h = {"feat": feat, "score": score}
@@ -157,15 +149,12 @@ if __name__ == "__main__":
             break  # all features have been used
         used_feats.append(h["feat"])
 
-        # print(P)
         h["alpha"] = 0.5 * (np.log(np.dot(P, 1 + h["score"]) / np.dot(P, 1 - h["score"])))
         weak_rankers.append(h)
 
         alpha[h["feat"]] += h["alpha"]
 
-        # print(alpha)
         predictions = np.dot(doc_feats, alpha)
-        # print(predictions)
         score = metric(predictions, correct_docs)
         new_P = np.exp(-score)
         P = new_P / new_P.sum()

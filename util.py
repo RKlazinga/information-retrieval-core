@@ -41,7 +41,7 @@ def features_per_doc(query: List, doc: List, reader):
 DOCOFFSET = None
 
 
-def getbody(docid, f):
+def getbody(docid, docsfile):
     global DOCOFFSET
     if DOCOFFSET is None:
         DOCOFFSET = {}
@@ -50,8 +50,8 @@ def getbody(docid, f):
             for [docid, _, offset] in tsvreader:
                 DOCOFFSET[docid] = int(offset)
 
-    f.seek(DOCOFFSET[docid])
-    line = f.readline()
+    docsfile.seek(DOCOFFSET[docid])
+    line = docsfile.readline()
     assert line.startswith(docid + "\t"), f"Looking for {docid}, found {line}"
     linelist = line.rstrip().split("\t")
     if len(linelist) == 4:
