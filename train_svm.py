@@ -18,8 +18,8 @@ def get_features():
         "data/triples.tsv",
         sep="\t",
         names=["topic", "query", "pos1", "pos2", "pos3", "pos4", "not1", "not2", "not3", "not4"],
-    )[:100]
-    ix = FileStorage("data/msmarcoidx").open_index().reader()
+    )
+    searcher = FileStorage("data/msmarcoidx").open_index().searcher()
 
     features = np.array([[], [], [], [], [], [], []]).T
     labels = []
@@ -29,7 +29,7 @@ def get_features():
             query = [token.text for token in stem(query)]
             for i, doc in enumerate([neg] + [pos]):
                 doc = [token.text for token in stem(doc)]
-                docfeats = features_per_doc(query, doc, ix)
+                docfeats = features_per_doc(query, doc, searcher)
                 features = np.concatenate([features, docfeats[None, :]], axis=0)
                 labels.append(i)
 

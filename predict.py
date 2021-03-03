@@ -71,7 +71,7 @@ def predict(inp):
                 ret.append([qid, docids[idx], rank + 1, relevance[idx], run_id])
 
         except:
-            print("ERROR", qid, query, features)
+            print("ERROR: query ", qid, query, " has no results ", results, features)
 
     return ret
 
