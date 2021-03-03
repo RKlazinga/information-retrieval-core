@@ -38,19 +38,14 @@ def features_per_doc(query: List, doc: List, searcher):
     return docfeats
 
 
-DOCOFFSET = None
+DOCOFFSET = {}
+with open("data/msmarco-docs-lookup.tsv", "rt", encoding="utf8") as f:
+    tsvreader = csv.reader(f, delimiter="\t")
+    for [docid, _, offset] in tsvreader:
+        DOCOFFSET[docid] = int(offset)
 
 
 def getbody(docid, docsfile):
-    global DOCOFFSET
-    if DOCOFFSET is None:
-        print("Loading docoffset...")
-        DOCOFFSET = {}
-        with open("data/msmarco-docs-lookup.tsv", "rt", encoding="utf8") as f:
-            tsvreader = csv.reader(f, delimiter="\t")
-            for [docid, _, offset] in tsvreader:
-                DOCOFFSET[docid] = int(offset)
-
     docsfile.seek(DOCOFFSET[docid])
     line = docsfile.readline()
     assert line.startswith(docid + "\t"), f"Looking for {docid}, found {line}"

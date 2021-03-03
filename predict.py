@@ -1,5 +1,6 @@
 import argparse
 import csv
+import multiprocessing as mp
 
 import joblib
 import numpy as np
@@ -30,7 +31,13 @@ elif args.model == "adarank":
 stem = StemmingAnalyzer()
 
 
+def openfilesearcher():
+    global DOCSFILE
+    DOCSFILE = open("data/msmarco-docs.tsv", "rt", encoding="utf8")
+
+
 def predict(inp):
+    global DOCSFILE
     qid, query = inp
     ret = []
 
@@ -55,10 +62,9 @@ def predict(inp):
         try:
             if args.model == "adarank":
                 relevance = np.dot(features, alpha)
-                ordering = np.argsort(relevance)
             else:
                 relevance = svm.predict(features) + features[:, -1] / 100
-                ordering = np.argsort(relevance)
+            ordering = np.argsort(-relevance)
 
             for rank, idx in enumerate(ordering[:25]):
                 ret.append([qid, docids[idx], rank + 1, relevance[idx], run_id])
@@ -74,12 +80,14 @@ with open("data/msmarco-test2019-queries.tsv", "rt", encoding="utf8") as f:
     for qi, quer in csv.reader(f, delimiter="\t"):
         queries.append([qi, quer])
 
-print("Loading documents file and whoosh searcher...")
-with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as DOCSFILE, ix.searcher(
-    weighting=okapi.weighting if args.model == "okapi" else whoosh.scoring.BM25F
-) as SEARCHER:
-    print(f"Predicting {len(queries)} queries with {args.model}...")
-    querydocrankings = process_map(predict, queries, max_workers=4)
+print(f"Predicting {len(queries)} queries with {args.model}...")
+querydocrankings = []
+with ix.searcher(weighting=okapi.weighting if args.model == "okapi" else whoosh.scoring.BM25F) as SEARCHER:
+    with mp.Pool(processes=24, initializer=openfilesearcher) as pool:
+        with tqdm(total=len(queries)) as pbar:
+            for i, qdr in enumerate(pool.imap_unordered(predict, queries)):
+                querydocrankings.append(qdr)
+                pbar.update()
 
 with open(f"output/{args.model}-predictions.trec", "w") as out:
     for querydocs in querydocrankings:
