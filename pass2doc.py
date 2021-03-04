@@ -1,4 +1,5 @@
 import csv
+import multiprocessing as mp
 import os
 
 from tqdm import tqdm
@@ -51,17 +52,34 @@ with open("data/collection.tsv", "rt") as f:
     for pid, text in tqdm(csv.reader(f, delimiter="\t")):
         passagetext[pid] = text
 
-with open("data/thesis_dataset_graded_relevance.tsv", "rt") as grelfile, open(
-    "data/pass2doc.json", "w"
-) as out, docix.searcher(weighting=okapi.weighting) as s, queryix.searcher(weighting=okapi.weighting) as qs:
-    for qid, pid, relevance in tqdm(csv.reader(grelfile, delimiter="\t"), total=800):
-        closestqueries = qs.search(qqp.parse(querytext[qid]), limit=5)
-        closestdocs = s.search(docqp.parse(passagetext[pid]), limit=5)
-        if len(closestqueries) == 0 or len(closestdocs) == 0:
-            print(f"No match found for {qid} {pid} {relevance}")
-            print("queries", closestqueries)
-            print("documents", closestdocs)
-            continue
-        for q, d in zip(closestqueries, closestdocs):
-            print(f"{q['qid']} {d['docid']} {relevance}")
-            out.write(f"{q['qid']} 0 {d['docid']} {relevance}")
+
+def retrieve(inp):
+    qid, pid, relevance = inp
+    ret = []
+    closestqueries = qs.search(qqp.parse(querytext[qid]), limit=5)
+    closestdocs = s.search(docqp.parse(passagetext[pid]), limit=5)
+    if len(closestqueries) == 0 or len(closestdocs) == 0:
+        return None
+    for q, d in zip(closestqueries, closestdocs):
+        ret.append([q["qid"], d["docid"], relevance])
+    return ret
+
+
+qrels = []
+with open("data/thesis_dataset_graded_relevance.tsv", "rt") as grelfile, docix.searcher(
+    weighting=okapi.weighting
+) as s, queryix.searcher(weighting=okapi.weighting) as qs, open("data/graded-qrels.txt", "w") as out:
+    with mp.Pool(processes=24) as pool:
+        with tqdm(total=800) as pbar:
+            found, sofar = 0, 0
+            for passdoc in pool.imap_unordered(retrieve, csv.reader(grelfile, delimiter="\t")):
+                sofar += 1
+                pbar.set_description(f"{found} / {sofar}")
+                pbar.update()
+                if passdoc is None:
+                    continue
+                found += 1
+                pbar.set_description(f"{found} / {sofar}")
+                for pd in passdoc:
+                    qrels.append(pd)
+                    out.write(f"{pd[0]} 0 {pd[1]} {pd[2]}")

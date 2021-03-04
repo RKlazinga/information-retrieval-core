@@ -13,12 +13,12 @@ from whoosh.filedb.filestore import FileStorage
 from whoosh.qparser import QueryParser
 
 import okapi
-from util import features_per_doc, getbody
+from features import get_doc_feats
 
 parser = argparse.ArgumentParser()
 parser.add_argument("model", type=str, choices=["bm25", "okapi", "svm", "adarank"])
-parser.add_argument("-svm_file", type=str, choices=["svm1k", "svm100k"], default="svm100k")
-parser.add_argument("-limit", type=int, default=50)
+parser.add_argument("-svm_file", type=str, default="svm")
+parser.add_argument("-limit", type=int, default=1000)
 parser.add_argument("-binary", action="store_true")
 parser.add_argument("-add_bm25", action="store_true")
 args = parser.parse_args()
@@ -32,8 +32,6 @@ if args.model == "svm":
 elif args.model == "adarank":
     alpha = np.load("ada.npy")
 
-stem = StemmingAnalyzer()
-
 top100 = {}
 with open("data/msmarco-doctest2019-top100") as f:
     for qid, _, docid, _, _, _ in csv.reader(f, delimiter=" "):
@@ -41,14 +39,15 @@ with open("data/msmarco-doctest2019-top100") as f:
             top100[qid] = []
         top100[qid].append(docid)
 
+preprocess = whoosh.analysis.StemmingAnalyzer()
+
 
 def openfilesearcher():
-    global DOCSFILE
-    DOCSFILE = open("data/msmarco-docs.tsv", "rt", encoding="utf8")
+    global FILE
+    FILE = open("data/msmarco-docs.tsv", "rt", encoding="utf8")
 
 
 def predict(inp):
-    global DOCSFILE
     qid, query = inp
     ret = []
 
@@ -58,14 +57,12 @@ def predict(inp):
             ret.append([qid, hit["docid"], rank + 1, results.score(rank), run_id])
 
     if args.model == "svm" or args.model == "adarank":
-        query = [token.text for token in stem(query)]
+        query = [token.text for token in preprocess(query)]
 
         docids = []
         features = []
         for docid in top100[qid]:
-            body = [token.text for token in stem(getbody(docid, DOCSFILE))]
-
-            features.append(features_per_doc(query, body, SEARCHER))
+            features.append(get_doc_feats(docid, query, FILE, SEARCHER))
             docids.append(docid)
         features = np.array(features)
 

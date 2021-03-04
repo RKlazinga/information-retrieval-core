@@ -51,3 +51,9 @@ for model in okapi bm25 svm adarank; do
 ./trec_eval/trec_eval data/2019qrels-docs.txt output/${model}-predictions.trec > output/${model}-trec-eval.txt
 done
 ```
+
+## Acknowledgments
+
+Mutliple features are based on the implementations found in this repo: https://github.com/jax79sg/IRDM2017
+
+The (broken) AdaRank implementation is based on this repo: https://github.com/rueycheng/AdaRank.git

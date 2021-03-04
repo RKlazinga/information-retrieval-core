@@ -9,11 +9,11 @@ from whoosh.filedb.filestore import FileStorage
 from sklearn import svm
 from sklearn.model_selection import train_test_split
 import joblib
-from util import features_per_doc
+from features import features_per_doc
 
 
 def get_features():
-    stem = whoosh.analysis.StemmingAnalyzer()
+    preprocess = whoosh.analysis.StandardAnalyzer()
     triples = pd.read_csv(
         "data/triples.tsv",
         sep="\t",
@@ -26,9 +26,9 @@ def get_features():
 
     for _, (_, query, _, _, _, pos, _, _, _, neg) in tqdm(triples.iterrows(), total=len(triples)):
         try:
-            query = [token.text for token in stem(query)]
+            query = [token.text for token in preprocess(query)]
             for i, doc in enumerate([neg] + [pos]):
-                doc = [token.text for token in stem(doc)]
+                doc = [token.text for token in preprocess(doc)]
                 docfeats = features_per_doc(query, doc, searcher)
                 features = np.concatenate([features, docfeats[None, :]], axis=0)
                 labels.append(i)
