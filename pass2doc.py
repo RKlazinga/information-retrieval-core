@@ -10,12 +10,12 @@ from whoosh.qparser import QueryParser
 
 import okapi
 
-need_reload = False
+need_reload = True
 
 index_dir = "data/queryidx"
 if not os.path.exists(index_dir):
     os.mkdir(index_dir)
-    index.create_in(index_dir, Schema(qid=ID(stored=True), body=TEXT(analyzer=StemmingAnalyzer(), stored=True)))
+    index.create_in(index_dir, Schema(qid=ID(stored=True), body=TEXT(stored=True)))
     need_reload = True
 
 ix = FileStorage(index_dir).open_index()
@@ -23,6 +23,10 @@ if need_reload:
     ix.writer().commit(mergetype=writing.CLEAR)
     writer = ix.writer()
     with open(f"data/msmarco-doctrain-queries.tsv", "rt", encoding="utf8") as f:
+        tsvreader = csv.reader(f, delimiter="\t")
+        for [topicid, querystring_of_topicid] in tsvreader:
+            writer.add_document(qid=topicid, body=querystring_of_topicid)
+    with open(f"data/msmarco-docdev-queries.tsv", "rt", encoding="utf8") as f:
         tsvreader = csv.reader(f, delimiter="\t")
         for [topicid, querystring_of_topicid] in tsvreader:
             writer.add_document(qid=topicid, body=querystring_of_topicid)
@@ -51,7 +55,7 @@ with open("data/thesis_dataset_graded_relevance.tsv", "rt") as grelfile, open(
     "data/pass2doc.json", "w"
 ) as out, docix.searcher(weighting=okapi.weighting) as s, queryix.searcher(weighting=okapi.weighting) as qs:
     for qid, pid, relevance in tqdm(csv.reader(grelfile, delimiter="\t"), total=800):
-        closestqueries = s.search(qqp.parse(querytext[qid]), limit=5)
+        closestqueries = qs.search(qqp.parse(querytext[qid]), limit=5)
         closestdocs = s.search(docqp.parse(passagetext[pid]), limit=5)
         if len(closestqueries) == 0 or len(closestdocs) == 0:
             print(f"No match found for {qid} {pid} {relevance}")

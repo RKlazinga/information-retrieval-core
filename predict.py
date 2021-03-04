@@ -34,6 +34,13 @@ elif args.model == "adarank":
 
 stem = StemmingAnalyzer()
 
+top100 = {}
+with open("data/msmarco-doctest2019-top100") as f:
+    for qid, _, docid, _, _, _ in csv.reader(f, delimiter=" "):
+        if qid not in top100:
+            top100[qid] = []
+        top100[qid].append(docid)
+
 
 def openfilesearcher():
     global DOCSFILE
@@ -51,16 +58,15 @@ def predict(inp):
             ret.append([qid, hit["docid"], rank + 1, results.score(rank), run_id])
 
     if args.model == "svm" or args.model == "adarank":
-        results = SEARCHER.search(qp.parse(query), limit=args.limit)
         query = [token.text for token in stem(query)]
 
         docids = []
         features = []
-        for rank, hit in enumerate(results):
-            body = [token.text for token in stem(getbody(hit["docid"], DOCSFILE))]
+        for docid in top100[qid]:
+            body = [token.text for token in stem(getbody(docid, DOCSFILE))]
 
             features.append(features_per_doc(query, body, SEARCHER))
-            docids.append(hit["docid"])
+            docids.append(docid)
         features = np.array(features)
 
         try:
@@ -80,7 +86,7 @@ def predict(inp):
                     ret.append([qid, docids[idx], rank + 1, relevance[idx], run_id])
 
         except:
-            print("ERROR: query ", qid, query, " has no results ", results, features)
+            print("ERROR: query ", qid, query, " has no features ", features)
 
     return ret
 
