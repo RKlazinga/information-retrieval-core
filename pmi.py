@@ -1,6 +1,14 @@
 import collections
+import csv
+
+import joblib
+from nltk.util import ngrams
 import numpy as np
-import nltk
+import whoosh.analysis
+
+from features import getbody
+
+preprocess = whoosh.analysis.StemmingAnalyzer()
 
 
 class PMI:
@@ -16,7 +24,7 @@ class PMI:
         """
         self._generateBigrams(text)
         self._generateUnigrams(text)
-        self.corpussize = len(nltk.word_tokenize(text))
+        self.corpussize = len(preprocess(text))
 
     def _generateNgrams(self, text, n=2):
         """
@@ -25,8 +33,8 @@ class PMI:
         :param n: The number, default bigram.
         :return: 
         """
-        token = nltk.word_tokenize(text)
-        computedNgrams = nltk.util.ngrams(token, n)
+        token = preprocess(text)
+        computedNgrams = ngrams(token, n)
         return collections.Counter(computedNgrams)
 
     def _generateBigrams(self, text):
@@ -84,12 +92,18 @@ class PMI:
         return pmi
 
 
-top100 = {}
+top100 = set()
 with open("data/msmarco-doctest2019-top100") as f:
     for qid, _, docid, _, _, _ in csv.reader(f, delimiter=" "):
-        if qid not in top100:
-            top100[qid] = []
-        top100[qid].append(docid)
-preprocess = whoosh.analysis.StemmingAnalyzer()
+        top100.add(docid)
 
-# with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as FILE:
+text = ""
+with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as FILE:
+    for docid in top100:
+        body = getbody(docid, FILE)
+        if body is None:
+            continue
+        text += " " + body
+
+pmi = PMI(text)
+joblib.dump(pmi, "pmi.pkl")
