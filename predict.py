@@ -18,7 +18,7 @@ from util import features_per_doc, getbody
 parser = argparse.ArgumentParser()
 parser.add_argument("model", type=str, choices=["bm25", "okapi", "svm", "adarank"])
 parser.add_argument("-svm_file", type=str, choices=["svm1k", "svm100k"], default="svm100k")
-parser.add_argument("-preselection", type=int, default=50)
+parser.add_argument("-limit", type=int, default=50)
 parser.add_argument("-binary", action="store_true")
 parser.add_argument("-add_bm25", action="store_true")
 args = parser.parse_args()
@@ -46,12 +46,12 @@ def predict(inp):
     ret = []
 
     if args.model == "okapi" or args.model == "bm25":
-        results = SEARCHER.search(qp.parse(query), limit=args.preselection)
+        results = SEARCHER.search(qp.parse(query), limit=args.limit)
         for rank, hit in enumerate(results):
             ret.append([qid, hit["docid"], rank + 1, results.score(rank), run_id])
 
     if args.model == "svm" or args.model == "adarank":
-        results = SEARCHER.search(qp.parse(query), limit=args.preselection)
+        results = SEARCHER.search(qp.parse(query), limit=args.limit)
         query = [token.text for token in stem(query)]
 
         docids = []
@@ -75,7 +75,7 @@ def predict(inp):
                     relevance += features[:, -1] / 100
             ordering = np.argsort(-relevance)
 
-            for rank, idx in enumerate(ordering[:25]):
+            for rank, idx in enumerate(ordering):
                 if relevance[idx] != 0:
                     ret.append([qid, docids[idx], rank + 1, relevance[idx], run_id])
 
