@@ -16,46 +16,56 @@ from tqdm import tqdm
 from whoosh.filedb.filestore import FileStorage
 
 from features import get_doc_feats
+from pmi import PMI
 
-# The query string for each topicid is querystring[topicid]
-querystring = {}
-with open("data/msmarco-doctrain-queries.tsv", "rt", encoding="utf8") as f:
-    for [topicid, querystring_of_topicid] in csv.reader(f, delimiter="\t"):
-        querystring[topicid] = querystring_of_topicid
-with open("data/msmarco-docdev-queries.tsv", "rt", encoding="utf8") as f:
-    for [topicid, querystring_of_topicid] in csv.reader(f, delimiter="\t"):
-        querystring[topicid] = querystring_of_topicid
+if not os.path.exists("querystrings.pkl"):
+    # if True:
+    # The query string for each topicid is querystring[topicid]
+    querystring = {}
+    with open("data/msmarco-doctrain-queries.tsv", "rt", encoding="utf8") as f:
+        for [topicid, querystring_of_topicid] in csv.reader(f, delimiter="\t"):
+            querystring[topicid] = querystring_of_topicid
+    with open("data/msmarco-docdev-queries.tsv", "rt", encoding="utf8") as f:
+        for [topicid, querystring_of_topicid] in csv.reader(f, delimiter="\t"):
+            querystring[topicid] = querystring_of_topicid
 
-# For each topicid, the list of positive docids is qrel[topicid]
-qrel = {}
-with open("data/msmarco-doctrain-qrels.tsv", "rt", encoding="utf8") as f:
-    for [topicid, _, docid, rel] in csv.reader(f, delimiter=" "):
-        assert rel == "1"
-        if topicid in qrel:
-            qrel[topicid].append(docid)
-        else:
-            qrel[topicid] = [docid]
-with open("data/msmarco-docdev-qrels.tsv", "rt", encoding="utf8") as f:
-    for [topicid, _, docid, rel] in csv.reader(f, delimiter=" "):
-        assert rel == "1"
-        if topicid in qrel:
-            qrel[topicid].append(docid)
-        else:
-            qrel[topicid] = [docid]
+    # For each topicid, the list of positive docids is qrel[topicid]
+    qrel = {}
+    with open("data/msmarco-doctrain-qrels.tsv", "rt", encoding="utf8") as f:
+        for [topicid, _, docid, rel] in csv.reader(f, delimiter=" "):
+            assert rel == "1"
+            if topicid in qrel:
+                qrel[topicid].append(docid)
+            else:
+                qrel[topicid] = [docid]
+    with open("data/msmarco-docdev-qrels.tsv", "rt", encoding="utf8") as f:
+        for [topicid, _, docid, rel] in csv.reader(f, delimiter=" "):
+            assert rel == "1"
+            if topicid in qrel:
+                qrel[topicid].append(docid)
+            else:
+                qrel[topicid] = [docid]
 
+    top100 = {}
+    with open("data/msmarco-doctrain-top100") as f:
+        for qid, _, docid, _, _, _ in csv.reader(f, delimiter=" "):
+            if qid not in top100:
+                top100[qid] = []
+            top100[qid].append(docid)
+    with open("data/msmarco-docdev-top100") as f:
+        for qid, _, docid, _, _, _ in csv.reader(f, delimiter=" "):
+            if qid not in top100:
+                top100[qid] = []
+            top100[qid].append(docid)
 
-top100 = {}
-with open("data/msmarco-doctrain-top100") as f:
-    for qid, _, docid, _, _, _ in csv.reader(f, delimiter=" "):
-        if qid not in top100:
-            top100[qid] = []
-        top100[qid].append(docid)
-with open("data/msmarco-docdev-top100") as f:
-    for qid, _, docid, _, _, _ in csv.reader(f, delimiter=" "):
-        if qid not in top100:
-            top100[qid] = []
-        top100[qid].append(docid)
-
+    joblib.dump(querystring, "querystrings.pkl")
+    joblib.dump(qrel, "qrels.pkl")
+    joblib.dump(top100, "top100.pkl")
+else:
+    print("loading query-document metadata...")
+    querystring = joblib.load("querystrings.pkl")
+    qrel = joblib.load("qrels.pkl")
+    top100 = joblib.load("top100.pkl")
 
 preprocess = whoosh.analysis.StemmingAnalyzer()
 
@@ -65,7 +75,7 @@ def openfilesearcher():
     FILE = open("data/msmarco-docs.tsv", "rt", encoding="utf8")
 
 
-def get_features(rank, binary=False):
+def get_features(rank):
     features = []
     labels = []
 
@@ -82,7 +92,7 @@ def get_features(rank, binary=False):
             docid = random.choice(qrel[qid])
             docfeats = get_doc_feats(docid, query, FILE, SEARCHER)
             features.append(docfeats)
-            if binary:
+            if not args.graded:
                 labels.append(1)
             else:
                 labels.append(4 if random.random() < 0.5 else 3)
@@ -91,12 +101,12 @@ def get_features(rank, binary=False):
             docid = random.choice(list(set(top100[qid]) - set(qrel[qid])))
             docfeats = get_doc_feats(docid, query, FILE, SEARCHER)
             features.append(docfeats)
-            if binary:
+            if not args.graded:
                 labels.append(0)
             else:
                 labels.append(1 if random.random() > 0.5 else 2)
         except Exception as e:
-            print(e)
+            print("ERROR:", e)
 
     return np.array(features), np.array(labels)
 
@@ -108,7 +118,10 @@ if __name__ == "__main__":
     parser.add_argument("-num_graded", type=int, default=10000)
     args = parser.parse_args()
 
+    print("opening searcher...")
     with FileStorage("data/msmarcoidx").open_index().searcher() as SEARCHER:
+
+        print("getting features...")
         with mp.Pool(24, initializer=openfilesearcher) as pool:
             res = pool.imap(get_features, range(24))
             features, labels = [], []
@@ -119,10 +132,10 @@ if __name__ == "__main__":
             labels = np.concatenate(labels)
 
         if args.graded:
-            with open("graded-qrels.tsv", "rt", encoding="utf8") as qrels:
+            with open("graded-qrels.tsv", "rt", encoding="utf8") as gradqrelsfile:
                 openfilesearcher()
                 graded_features, graded_labels = [], []
-                for qid, _, docid, relevance in tqdm(csv.reader(qrels, delimiter=" "), total=316):
+                for qid, _, docid, relevance in tqdm(csv.reader(gradqrelsfile, delimiter=" "), total=316):
                     query = [token.text for token in preprocess(querystring[qid])]
                     docfeats = get_doc_feats(docid, query, FILE, SEARCHER)
                     graded_features.append(docfeats)
@@ -132,10 +145,12 @@ if __name__ == "__main__":
                     features = np.concatenate((features, graded_features), axis=0)
                     labels = np.concatenate((labels, graded_labels), axis=0)
 
+    print(features)
     print(features.shape, labels.shape)
     labels = labels.astype(np.float32)
     trainX, testX, trainY, testY = train_test_split(features, labels, test_size=0.1)
 
+    print("training...")
     if args.graded:
         model = svm.SVR(max_iter=100_000).fit(trainX, trainY)
         print("Train MSE:", metrics.mean_squared_error(model.predict(trainX), trainY))

@@ -14,9 +14,10 @@ from whoosh.qparser import QueryParser
 
 import okapi
 from features import get_doc_feats
+from pmi import PMI
 
 parser = argparse.ArgumentParser()
-parser.add_argument("model", type=str, choices=["bm25", "okapi", "svm", "adarank"])
+parser.add_argument("model", type=str, choices=["bm25", "okapi", "svc", "svr", "adarank"])
 parser.add_argument("-svm_file", type=str, default="svm")
 parser.add_argument("-limit", type=int, default=1000)
 parser.add_argument("-binary", action="store_true")
@@ -27,7 +28,7 @@ ix = FileStorage("data/msmarcoidx").open_index()
 qp = QueryParser("body", schema=ix.schema)
 
 run_id = args.model
-if args.model == "svm":
+if "sv" in args.model:
     svm = joblib.load(f"{args.svm_file}.pkl")
 elif args.model == "adarank":
     alpha = np.load("ada.npy")
@@ -56,7 +57,7 @@ def predict(inp):
         for rank, hit in enumerate(results):
             ret.append([qid, hit["docid"], rank + 1, results.score(rank), run_id])
 
-    if args.model == "svm" or args.model == "adarank":
+    if "sv" in args.model or args.model == "adarank":
         query = [token.text for token in preprocess(query)]
 
         docids = []
@@ -66,24 +67,23 @@ def predict(inp):
             docids.append(docid)
         features = np.array(features)
 
-        try:
-            if args.model == "adarank":
-                relevance = np.dot(features, alpha)
+        # try:
+        if args.model == "adarank":
+            relevance = np.dot(features, alpha)
+        else:
+            if args.binary or args.model == "svr":
+                relevance = svm.predict(features)
             else:
-                if args.binary:
-                    relevance = svm.predict(features)
-                else:
-                    relevance = svm.decision_function(features)
-                if args.add_bm25:
-                    relevance += features[:, -1] / 100
-            ordering = np.argsort(-relevance)
+                relevance = svm.decision_function(features)
+            if args.add_bm25:
+                relevance += features[:, -1] / 100
+        ordering = np.argsort(-relevance)
 
-            for rank, idx in enumerate(ordering):
-                if relevance[idx] != 0:
-                    ret.append([qid, docids[idx], rank + 1, relevance[idx], run_id])
-
-        except Exception as e:
-            print("ERROR:", e)
+        for rank, idx in enumerate(ordering):
+            if relevance[idx] != 0:
+                ret.append([qid, docids[idx], rank + 1, relevance[idx], run_id])
+        # except Exception as e:
+        #     print("ERROR:", e)
 
     return ret
 

@@ -13,6 +13,7 @@ parser.add_argument("data", type=str)
 parser.add_argument("-num_docs", type=int, default=None)
 parser.add_argument("-threads", type=int, default=1)  # seems using more than 1 thread may be broken?
 parser.add_argument("-reload", action="store_true")
+parser.add_argument("-migrate_url_to_text_field", action="store_true")
 args = parser.parse_args()
 
 schema = Schema(
@@ -31,6 +32,22 @@ if not os.path.exists(index_dir):
 storage = FileStorage(index_dir)
 # Open an existing index
 ix = storage.open_index()
+
+if args.migrate_url_to_text_field:
+    writer = ix.writer()
+    writer.add_field("url_text", TEXT(stored=True, analyzer=StemmingAnalyzer()))
+    with open(args.data, "r", encoding="utf-8") as docs:
+        i = 0
+        line = docs.readline()
+        pbar = tqdm(total=3_213_835)
+        while line != "":
+            _, url, _, _ = line.split("\t")
+            writer.update_document(url_text=url.replace(".", " "))
+            line = docs.readline()
+            i += 1
+            pbar.update(1)
+    writer.commit()
+    exit(0)
 
 ix.writer().commit(mergetype=writing.CLEAR)
 
