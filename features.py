@@ -48,7 +48,7 @@ def features_per_doc(query: List, doc: List, searcher, field="body"):
         docfeats[6] += whoosh.scoring.bm25(idf, wfcorp, len(doc), AVG_DOC_LEN, B=0.75, K1=1.2)
 
     # LMIR features
-    if len(doc) > 0:
+    if len(doc) > 0 and len(query) > 0:
         for term in query:
             wfdoc = doc.count(term)
             idf = np.log(NDOCS / (searcher.reader().doc_frequency(field, term) + 1e-8))
