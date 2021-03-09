@@ -1,8 +1,10 @@
 import argparse
 import csv
+import json
 import multiprocessing as mp
 import os
 import random
+import time
 
 import joblib
 import numpy as np
@@ -15,6 +17,7 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 from whoosh.filedb.filestore import FileStorage
 
+import util
 from features import get_doc_feats
 from pmi import PMI
 
@@ -58,14 +61,13 @@ if not os.path.exists("querystrings.pkl"):
                 top100[qid] = []
             top100[qid].append(docid)
 
-    joblib.dump(querystring, "querystrings.pkl")
-    joblib.dump(qrel, "qrels.pkl")
-    joblib.dump(top100, "top100.pkl")
+    util.save("querystrings.pkl", querystring)
+    util.save("qrels.pkl", qrel)
+    util.save("top100.pkl", top100)
 else:
-    print("loading query-document metadata...")
-    querystring = joblib.load("querystrings.pkl")
-    qrel = joblib.load("qrels.pkl")
-    top100 = joblib.load("top100.pkl")
+    querystring = util.load("querystrings.pkl")
+    qrel = util.load("qrels.pkl")
+    top100 = util.load("top100.pkl")
 
 preprocess = whoosh.analysis.StemmingAnalyzer()
 
@@ -75,22 +77,18 @@ def openfilesearcher():
     FILE = open("data/msmarco-docs.tsv", "rt", encoding="utf8")
 
 
-def get_features(rank):
+def get_features(inp):
     features = []
     labels = []
 
-    if rank == 0:
-        pbar = tqdm(range(int(args.num_docs / 2 / 24)))
-    else:
-        pbar = range(int(args.num_docs / 2 / 24))
-    for _ in pbar:
+    for _ in inp:
         try:
             qid = random.choice(list(querystring.keys()))
             query = [token.text for token in preprocess(querystring[qid])]
 
             # positive sample
             docid = random.choice(qrel[qid])
-            docfeats = get_doc_feats(docid, query, FILE, SEARCHER)
+            docfeats = get_doc_feats(docid, query, FILE, SEARCHER, PMI1M)
             features.append(docfeats)
             if not args.graded:
                 labels.append(1)
@@ -99,7 +97,7 @@ def get_features(rank):
 
             # negative sample
             docid = random.choice(list(set(top100[qid]) - set(qrel[qid])))
-            docfeats = get_doc_feats(docid, query, FILE, SEARCHER)
+            docfeats = get_doc_feats(docid, query, FILE, SEARCHER, PMI1M)
             features.append(docfeats)
             if not args.graded:
                 labels.append(0)
@@ -111,6 +109,13 @@ def get_features(rank):
     return np.array(features), np.array(labels)
 
 
+def process_graded(inp):
+    qid, _, docid, relevance = inp
+    query = [token.text for token in preprocess(querystring[qid])]
+    docfeats = get_doc_feats(docid, query, FILE, SEARCHER, PMI1M)
+    return docfeats, relevance
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-graded", action="store_true")
@@ -119,29 +124,34 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print("opening searcher...")
+    tik = time.time()
     with FileStorage("data/msmarcoidx").open_index().searcher() as SEARCHER:
+        print("took:", time.time() - tik)
+        PMI1M = util.load("pmi1m.pkl")
 
         print("getting features...")
+        features, labels = [], []
         with mp.Pool(24, initializer=openfilesearcher) as pool:
-            res = pool.imap(get_features, range(24))
-            features, labels = [], []
-            for f, l in res:
-                features.append(f)
-                labels.append(l)
+            pbar = tqdm(total=args.num_docs)
+            chunksize = 10  # int(args.num_docs / 24 / 16)
+            for f, l in pool.imap_unordered(get_features, util.chunks(range(int(args.num_docs / 2)), n=chunksize)):
+                features.append(f.squeeze())
+                labels.append(l.squeeze())
+                pbar.update(chunksize)
             features = np.concatenate(features)
             labels = np.concatenate(labels)
 
-        if args.graded:
-            with open("graded-qrels.tsv", "rt", encoding="utf8") as gradqrelsfile:
-                openfilesearcher()
-                graded_features, graded_labels = [], []
-                for qid, _, docid, relevance in tqdm(csv.reader(gradqrelsfile, delimiter=" "), total=316):
-                    query = [token.text for token in preprocess(querystring[qid])]
-                    docfeats = get_doc_feats(docid, query, FILE, SEARCHER)
-                    graded_features.append(docfeats)
-                    graded_labels.append(relevance)
-                graded_features, graded_labels = np.array(graded_features), np.array(graded_labels)
-                for _ in range(args.num_duplicate // 316):
+            if args.graded:
+                with open("graded-qrels.tsv", "rt", encoding="utf8") as gradqrelsfile:
+                    pbar = tqdm(total=316)
+                    graded_features, graded_labels = [], []
+                    for docfeats, relevance in pool.imap_unordered(
+                        process_graded, csv.reader(gradqrelsfile, delimiter=" ")
+                    ):
+                        graded_features.append(docfeats)
+                        graded_labels.append(relevance)
+                        pbar.update()
+                for _ in range(args.num_graded // 316):
                     features = np.concatenate((features, graded_features), axis=0)
                     labels = np.concatenate((labels, graded_labels), axis=0)
 
@@ -164,4 +174,4 @@ if __name__ == "__main__":
         print("Train score:", np.mean(model.predict(trainX) == trainY))
         print("Test score:", np.mean(model.predict(testX) == testY))
 
-    joblib.dump(model, "svm.pkl")
+    util.save("svm.pkl", model)

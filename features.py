@@ -8,8 +8,6 @@ from tqdm import tqdm
 
 import okapi
 
-pmi = None
-
 U_DIR = 2000
 LMD_SHORT = 0.65
 LMD_LONG = 0.25
@@ -17,11 +15,7 @@ LMD_LONG = 0.25
 preprocess = whoosh.analysis.StemmingAnalyzer()
 
 
-def get_doc_feats(docid, query, FILE, SEARCHER, use_title=True):
-    global pmi
-    if pmi is None:
-        pmi = joblib.load("pmi.pkl")
-
+def get_doc_feats(docid, query, FILE, SEARCHER, PMI, use_title=True):
     body = getbody(docid, FILE)
     doc = [token.text for token in preprocess(body)]
     docfeats = features_per_doc(query, doc, SEARCHER)
@@ -44,7 +38,7 @@ def get_doc_feats(docid, query, FILE, SEARCHER, use_title=True):
         max_pmi = -20
         for term in query:
             for word in field:
-                score = pmi.compute(term, word)
+                score = PMI.compute(term, word)
                 if score > max_pmi:
                     max_pmi = score
         pmis.append(max_pmi)

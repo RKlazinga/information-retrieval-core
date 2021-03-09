@@ -13,6 +13,7 @@ from whoosh.filedb.filestore import FileStorage
 from whoosh.qparser import QueryParser
 
 import okapi
+import util
 from features import get_doc_feats
 from pmi import PMI
 
@@ -29,7 +30,7 @@ qp = QueryParser("body", schema=ix.schema)
 
 run_id = args.model
 if "sv" in args.model:
-    svm = joblib.load(f"{args.svm_file}.pkl")
+    svm = util.load(f"{args.svm_file}.pkl")
 elif args.model == "adarank":
     alpha = np.load("ada.npy")
 
@@ -63,7 +64,7 @@ def predict(inp):
         docids = []
         features = []
         for docid in top100[qid]:
-            features.append(get_doc_feats(docid, query, FILE, SEARCHER))
+            features.append(get_doc_feats(docid, query, FILE, SEARCHER, PMI1M))
             docids.append(docid)
         features = np.array(features)
 
@@ -101,6 +102,7 @@ with open("data/msmarco-test2019-queries.tsv", "rt", encoding="utf8") as f:
 
 print(f"Predicting {len(queries)} queries with {args.model}...")
 querydocrankings = []
+PMI1M = util.load("pmi1m.pkl")
 with ix.searcher(weighting=whoosh.scoring.BM25F if args.model == "bm25" else okapi.weighting) as SEARCHER:
     with mp.Pool(processes=24, initializer=openfilesearcher) as pool:
         with tqdm(total=len(queries)) as pbar:

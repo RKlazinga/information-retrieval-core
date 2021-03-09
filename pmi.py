@@ -1,24 +1,48 @@
 import collections
 import csv
+import multiprocessing as mp
 import random
+import time
 
-import joblib
 import numpy as np
 import whoosh.analysis
 from nltk.util import ngrams
 from tqdm import tqdm
 
-from features import getbody
+import util
+
+pbar = None
+
+
+def count(x):
+    return collections.Counter(x)
+
+
+def fastcount(grams):
+    with mp.Pool(processes=24) as pool:
+        counts = collections.Counter()
+        for result in tqdm(pool.imap_unordered(func=count, iterable=util.chunks(grams))):
+            counts += result
+            pbar.update(CHUNK_SIZE)
+    return counts
+
 
 preprocess = whoosh.analysis.StemmingAnalyzer()
 
 
 class PMI:
     def __init__(self, tokens):
+        global pbar
         self.corpussize = len(tokens)
         print(self.corpussize)
-        self.bigrams = collections.Counter(ngrams(tokens, 2))
-        self.unigrams = collections.Counter(ngrams(tokens, 1))
+        tik = time.time()
+        print("counting bigrams...")
+        pbar = tqdm(total=self.corpussize)
+        self.bigrams = fastcount(ngrams(tokens, 2))
+        print("counting unigrams...")
+        pbar = tqdm(total=self.corpussize)
+        self.unigrams = fastcount(ngrams(tokens, 1))
+        print("took:", time.time() - tik)
 
     def _count_for_bigram(self, word1, word2):
         return self.bigrams[(word1, word2)]
@@ -41,11 +65,13 @@ class PMI:
 
 
 if __name__ == "__main__":
+    from features import getbody
+
+    print("loading in documents...")
     docids = set()
     with open("data/msmarco-doctrain-top100") as f:
         for _, _, docid, _, _, _ in csv.reader(f, delimiter=" "):
             docids.add(docid)
-
     corpus = []
     with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as FILE:
         for docid in random.choices(list(docids), k=1_000_000):
@@ -54,5 +80,6 @@ if __name__ == "__main__":
                 continue
             corpus.append(body)
 
+    print("preprocessing corpus...")
     pmi = PMI([token.text for token in preprocess(" ".join(corpus))])
-    joblib.dump(pmi, "pmi.pkl")
+    util.save(pmi, "pmi.pkl")
