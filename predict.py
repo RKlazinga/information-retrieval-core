@@ -11,11 +11,11 @@ from tqdm.contrib.concurrent import process_map
 from whoosh.analysis import StemmingAnalyzer
 from whoosh.filedb.filestore import FileStorage
 from whoosh.qparser import QueryParser
-
+from query_cluster import get_query_features
 import okapi
 import util
 from features import get_doc_feats
-from pmi import PMI
+from singletons import SEARCHER
 
 parser = argparse.ArgumentParser()
 parser.add_argument("model", type=str, choices=["bm25", "okapi", "svc", "svr", "adarank"])
@@ -29,10 +29,14 @@ ix = FileStorage("data/msmarcoidx").open_index()
 qp = QueryParser("body", schema=ix.schema)
 
 run_id = args.model
-if "sv" in args.model:
+if args.model == "clusvm":
+    clusvm = util.load(f"clusvm.pkl")
+elif "sv" in args.model:
     svm = util.load(f"{args.svm_file}.pkl")
 elif args.model == "adarank":
     alpha = np.load("ada.npy")
+elif args.model == "bm25":
+    SEARCHER = FileStorage("data/msmarcoidx").open_index().searcher()
 
 top100 = {}
 with open("data/msmarco-doctest2019-top100") as f:
@@ -44,11 +48,6 @@ with open("data/msmarco-doctest2019-top100") as f:
 preprocess = whoosh.analysis.StemmingAnalyzer()
 
 
-def openfilesearcher():
-    global FILE
-    FILE = open("data/msmarco-docs.tsv", "rt", encoding="utf8")
-
-
 def predict(inp):
     qid, query = inp
     ret = []
@@ -58,17 +57,34 @@ def predict(inp):
         for rank, hit in enumerate(results):
             ret.append([qid, hit["docid"], rank + 1, results.score(rank), run_id])
 
-    if "sv" in args.model or args.model == "adarank":
+    elif args.model == "clusvm":
+        query = [token.text for token in preprocess(query)]
+        queryfeats = get_query_features(query)
+
+        docids = []
+        features = []
+        for docid in top100[qid]:
+            features.append(get_doc_feats(docid, query, FILE))
+            docids.append(docid)
+        features = np.array(features)
+
+        relevance = clusvm.predict(queryfeats, features)
+        ordering = np.argsort(-relevance)
+
+        for rank, idx in enumerate(ordering):
+            if relevance[idx] != 0:
+                ret.append([qid, docids[idx], rank + 1, relevance[idx], run_id])
+
+    elif "sv" in args.model or args.model == "adarank":
         query = [token.text for token in preprocess(query)]
 
         docids = []
         features = []
         for docid in top100[qid]:
-            features.append(get_doc_feats(docid, query, FILE, SEARCHER, PMI1M))
+            features.append(get_doc_feats(docid, query, FILE))
             docids.append(docid)
         features = np.array(features)
 
-        # try:
         if args.model == "adarank":
             relevance = np.dot(features, alpha)
         else:
@@ -83,8 +99,9 @@ def predict(inp):
         for rank, idx in enumerate(ordering):
             if relevance[idx] != 0:
                 ret.append([qid, docids[idx], rank + 1, relevance[idx], run_id])
-        # except Exception as e:
-        #     print("ERROR:", e)
+
+    else:
+        print("ERROR: unsupported model")
 
     return ret
 
@@ -100,15 +117,18 @@ with open("data/msmarco-test2019-queries.tsv", "rt", encoding="utf8") as f:
         if id in testedqueries:
             queries.append([id, quer])
 
+
+def opendocsfile():
+    global FILE
+    FILE = open("data/msmarco-docs.tsv", "rt", encoding="utf8")
+
+
 print(f"Predicting {len(queries)} queries with {args.model}...")
 querydocrankings = []
-PMI1M = util.load("pmi1m.pkl")
-with ix.searcher(weighting=whoosh.scoring.BM25F if args.model == "bm25" else okapi.weighting) as SEARCHER:
-    with mp.Pool(processes=24, initializer=openfilesearcher) as pool:
-        with tqdm(total=len(queries)) as pbar:
-            for i, qdr in enumerate(pool.imap_unordered(predict, queries)):
-                querydocrankings.append(qdr)
-                pbar.update()
+with tqdm(total=len(queries)) as pbar, mp.Pool(24, initializer=opendocsfile) as pool:
+    for i, qdr in enumerate(pool.imap_unordered(predict, queries)):
+        querydocrankings.append(qdr)
+        pbar.update()
 
 with open(f"output/{args.model}-predictions.trec", "w") as out:
     for querydocs in querydocrankings:
