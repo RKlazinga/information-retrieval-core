@@ -82,4 +82,4 @@ with open("data/thesis_dataset_graded_relevance.tsv", "rt") as grelfile, docix.s
                 pbar.set_description(f"{found} / {sofar}")
                 for pd in passdoc:
                     qrels.append(pd)
-                    out.write(f"{pd[0]} 0 {pd[1]} {pd[2]}")
+                    out.write(f"{pd[0]} 0 {pd[1]} {pd[2]}\n")

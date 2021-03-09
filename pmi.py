@@ -1,95 +1,58 @@
 import collections
+import csv
+import random
+
+import joblib
 import numpy as np
-import nltk
+import whoosh.analysis
+from nltk.util import ngrams
+from tqdm import tqdm
+
+from features import getbody
+
+preprocess = whoosh.analysis.StemmingAnalyzer()
 
 
 class PMI:
-    bigrams = None
-    unigrams = None
-    corpussize = None
+    def __init__(self, tokens):
+        self.corpussize = len(tokens)
+        print(self.corpussize)
+        self.bigrams = collections.Counter(ngrams(tokens, 2))
+        self.unigrams = collections.Counter(ngrams(tokens, 1))
 
-    def __init__(self, text):
-        """
-        Features for PMI.
-        Will init corpus.
-        :param text: The corpus
-        """
-        self._generateBigrams(text)
-        self._generateUnigrams(text)
-        self.corpussize = len(nltk.word_tokenize(text))
-
-    def _generateNgrams(self, text, n=2):
-        """
-        Compute an ngram, given the test and N.        
-        :param text: The corpus
-        :param n: The number, default bigram.
-        :return: 
-        """
-        token = nltk.word_tokenize(text)
-        computedNgrams = nltk.util.ngrams(token, n)
-        return collections.Counter(computedNgrams)
-
-    def _generateBigrams(self, text):
-        """
-        Generate and store the bigrams        
-        :param text: corpus
-        :return: 
-        """
-        self.bigrams = self._generateNgrams(text, 2)
-
-    def _generateUnigrams(self, text):
-        """
-        Generate and store the unigrams        
-        :param text: corpus
-        :return: 
-        """
-        self.unigrams = self._generateNgrams(text, 1)
-
-    def _getCountForBigram(self, word1, word2):
-        """
-        Return the count of occurances for bigram        
-        :param word1: 
-        :param word2: 
-        :return: 
-        """
+    def _count_for_bigram(self, word1, word2):
         return self.bigrams[(word1, word2)]
 
-    def _getCountForUnigram(self, word1):
-        """
-        Return the count of occurances for bigram        
-        :param word1: 
-        :return: 
-        """
+    def _count_for_unigram(self, word1):
         count = self.unigrams[(word1)]
         if count == 0:
             count = 0.001
         return count
 
     def compute(self, word1, word2):
-        """
-        Compute the PMI value of a bigram        
-        :param word1: 
-        :param word2: 
-        :return: 
-        """
-        pmi = 0
-        if word1 is not None and word2 is not None:
-            P_w1w2 = self._getCountForBigram(word1, word2) / self.corpussize
-            p_w1 = self._getCountForUnigram(word1) / self.corpussize
-            p_w2 = self._getCountForUnigram(word2) / self.corpussize
-            try:
-                pmi = np.log2(P_w1w2 / (p_w1 * p_w2))
-            except ValueError:
-                pmi = 99999
-        return pmi
+        P_w1w2 = self._count_for_bigram(word1, word2) / self.corpussize
+        p_w1 = self._count_for_unigram(word1) / self.corpussize
+        p_w2 = self._count_for_unigram(word2) / self.corpussize
+        score = np.log(P_w1w2 / (p_w1 * p_w2))
+        if np.isfinite(score):
+            return score
+        else:
+            return -20
 
 
-top100 = {}
-with open("data/msmarco-doctest2019-top100") as f:
-    for qid, _, docid, _, _, _ in csv.reader(f, delimiter=" "):
-        if qid not in top100:
-            top100[qid] = []
-        top100[qid].append(docid)
-preprocess = whoosh.analysis.StemmingAnalyzer()
+if __name__ == "__main__":
+    docids = set()
+    with open("data/msmarco-doctrain-top100") as f:
+        for _, _, docid, _, _, _ in csv.reader(f, delimiter=" "):
+            docids.add(docid)
 
-# with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as FILE:
+    corpus = []
+    with open("data/msmarco-docs.tsv", "rt", encoding="utf8") as FILE:
+        for docid in random.choices(list(docids), k=1_000_000):
+            body = getbody(docid, FILE)
+            if body is None:
+                continue
+            corpus.append(body)
+
+    pmi = PMI([token.text for token in preprocess(" ".join(corpus))])
+    joblib.dump(pmi, "pmi.pkl")
