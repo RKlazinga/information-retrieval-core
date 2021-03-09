@@ -1,5 +1,7 @@
 import argparse
 import csv
+import math
+import random
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-qrel_file", type=str)
@@ -61,10 +63,13 @@ def display_doc(docid, docsfile):
 
 print()
 with open("data/msmarco-docs.tsv", encoding="utf-8") as docsfile:
+    items = list(queries.items())
+    random.shuffle(items)
     # go through the queries and how the model answered them
-    for qid, qtext in queries.items():
+    for qid, qtext in items:
         if qid in qrels:
             relevant_docs = qrels[qid]
+            relevant_docs.sort(key=lambda x: x[1], reverse=True)
             if qid in predictions:
                 predicted_docs = predictions[qid]
             else:
@@ -81,7 +86,7 @@ with open("data/msmarco-docs.tsv", encoding="utf-8") as docsfile:
 
             if len(predicted_docs) > 0:
                 print("-"*50)
-                print("| FALSE POSITIVES (irrelevant but scored highly)")
+                print("| FALSE POSITIVES (highest scoring irrelevant docs)")
                 print("-"*50)
                 print()
                 c = 0
@@ -94,16 +99,27 @@ with open("data/msmarco-docs.tsv", encoding="utf-8") as docsfile:
 
             print()
             print("-"*50)
-            print("| FALSE NEGATIVES (relevant but not scored)")
+            print("| FALSE NEGATIVES (lowest scoring relevant docs)")
             print("-"*50)
             print()
             c = 0
-            for idx, (docid, _) in enumerate(relevant_docs):
-                if docid not in [x[0] for x in predicted_docs]:
-                    print(f"Rank {idx+1} of {len(relevant_docs)}")
-                    display_doc(docid, docsfile)
-                    c += 1
-                    if c >= 5:
-                        break
+
+            discrepancies = []
+            for p in predicted_docs[::-1]:
+                for idx, (docid, _) in enumerate(relevant_docs):
+                    if p[0] == docid:
+                        # rated_too_low = p[1] - idx + 1
+                        discrepancies.append((docid, p[1], idx))
+                        # if docid not in [x[0] for x in predicted_docs]:
+                        #     print(f"Rank {idx+1} of {len(relevant_docs)}")
+                        #     display_doc(docid, docsfile)
+                        #     c += 1
+                        #     if c >= 5:
+                        #         break
+            # sort by the greatest difference between the judged rank, and the true rank
+            discrepancies.sort(key=lambda x: (int(x[1])**.75)-x[2], reverse=True)
+            for docid, judged_rank, true_rank in discrepancies[:5]:
+                print(f"Judged as {judged_rank} but was {true_rank + 1} of {len(relevant_docs)}")
+                display_doc(docid, docsfile)
             input("\nEnter to go to next query...")
             print("\n"*30)
