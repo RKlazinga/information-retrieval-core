@@ -7,11 +7,38 @@ import whoosh.scoring
 from tqdm import tqdm
 
 import okapi
-from singletons import SEARCHER, PMI, DOCOFFSET, PREPROCESS
+from singletons import DOCOFFSET, PMI, PREPROCESS, SEARCHER
 
 U_DIR = 2000
 LMD_SHORT = 0.65
 LMD_LONG = 0.25
+
+
+def get_query_features(query):
+    ndocs = SEARCHER.reader().doc_count_all()
+
+    feats = np.zeros((5, len(query)))
+
+    for i, term in enumerate(query):
+        df = SEARCHER.reader().doc_frequency("body", term)
+        idf = np.log(ndocs / (df + 1))
+        wfcorp = SEARCHER.reader().frequency("body", term) + 1
+
+        feats[0, i] = idf
+        feats[1, i] = wfcorp
+        feats[2, i] = wfcorp * idf
+        feats[3, i] = ndocs / wfcorp
+
+        tpmi = 0
+        for term2 in query:
+            tpmi += PMI.compute(term, term2)
+        feats[4, i] = tpmi
+
+    feats = np.concatenate(
+        (np.mean(feats, axis=1), np.max(feats, axis=1), np.sum(feats, axis=1), np.array([np.log(len(query) + 1)]))
+    )
+    feats = [np.log(score + 1) if score > 0 else -np.log(-score + 1) for score in feats]
+    return np.array(feats)
 
 
 def get_doc_feats(docid, query, FILE, use_title=True):
@@ -42,14 +69,14 @@ def get_doc_feats(docid, query, FILE, use_title=True):
             pmis += [np.sum(scores), np.max(scores), np.mean(scores)]
         else:
             pmis += [0, 0, 0]
-    pmis = [np.log(score) if score > 0 else -np.log(-score) for score in pmis]
+    pmis = [np.log(score + 1) if score > 0 else -np.log(-score + 1) for score in pmis]
     staticfeats = np.array(
         [
-            np.log(len(doc) + 1e-8),
-            np.log(len(title) + 1e-8),
-            np.log(len(url) + 1e-8),
-            np.log(slashcount + 1e-8),
-            np.log(notokenlen + 1e-8),
+            np.log(len(doc) + 1),
+            np.log(len(title) + 1),
+            np.log(len(url) + 1),
+            np.log(slashcount + 1),
+            np.log(notokenlen + 1),
             *pmis,
         ]
     )
@@ -73,8 +100,8 @@ def features_per_doc(query: List, doc: List, field="body"):
     for i, term in enumerate(intersection):
         wfdoc = doc.count(term)
         df = SEARCHER.reader().doc_frequency(field, term)
-        idf = np.log(NDOCS / (df + 1e-8))
-        wfcorp = SEARCHER.reader().frequency(field, term) + 1e-8
+        idf = np.log(NDOCS / (df + 1))
+        wfcorp = SEARCHER.reader().frequency(field, term) + 1
 
         # AdaRank features
         docfeats[0, i] = wfdoc
@@ -86,7 +113,7 @@ def features_per_doc(query: List, doc: List, field="body"):
         docfeats[6, i] = okapi.bm25(NDOCS, df, wfcorp, len(doc), AVG_DOC_LEN)
 
         # LMIR features
-        KL = -(1 / len(query)) * np.log(wfdoc / len(doc) + 1e-8)
+        KL = -(1 / len(query)) * np.log(wfdoc / len(doc) + 1)
         if np.isfinite(KL).all():
             docfeats[7, i] = KL
 
@@ -97,7 +124,7 @@ def features_per_doc(query: List, doc: List, field="body"):
         np.concatenate(
             (np.mean(docfeats, axis=1), np.max(docfeats, axis=1), np.sum(docfeats, axis=1), np.prod(prodfeats, axis=1))
         )
-        + 1e-8
+        + 1
     )
 
 

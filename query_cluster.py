@@ -1,5 +1,5 @@
-import random
 import multiprocessing as mp
+import random
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,34 +8,8 @@ import sklearn.cluster
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
-from singletons import PMI, PREPROCESS, QUERYDICT, SEARCHER
-
-
-def get_query_features(query):
-    ndocs = SEARCHER.reader().doc_count_all()
-
-    feats = np.zeros((5, len(query)))
-
-    for i, term in enumerate(query):
-        df = SEARCHER.reader().doc_frequency("body", term)
-        idf = np.log(ndocs / (df + 1e-8))
-        wfcorp = SEARCHER.reader().frequency("body", term) + 1e-8
-
-        feats[0, i] = idf
-        feats[1, i] = wfcorp
-        feats[2, i] = wfcorp * idf
-        feats[3, i] = ndocs / wfcorp
-
-        tpmi = 0
-        for term2 in query:
-            tpmi += PMI.compute(term, term2)
-        feats[4, i] = tpmi
-
-    feats = np.concatenate(
-        (np.mean(feats, axis=1), np.max(feats, axis=1), np.sum(feats, axis=1), np.array([np.log(len(query) + 1)]))
-    )
-    feats = [np.log(score + 1e-8) if score > 0 else -np.log(-score + 1e-8) for score in feats]
-    return np.array(feats)
+from features import get_query_features
+from singletons import PREPROCESS, QUERYDICT
 
 
 def get_random_queryfeatures(k=20_000):
@@ -52,7 +26,7 @@ if __name__ == "__main__":
         label_counts.append(len(np.unique(sklearn.cluster.DBSCAN().fit_predict(get_random_queryfeatures()))))
     print("median / mean num labels:", int(np.median(label_counts)), int(np.mean(label_counts)))
     avg_num_labels = int(np.median(label_counts))
-    127, 130, 128
+    127, 130, 128, 210
 
     queryfeats = get_random_queryfeatures()
 

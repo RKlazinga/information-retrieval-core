@@ -1,5 +1,4 @@
 import csv
-import multiprocessing as mp
 import os
 
 import whoosh
@@ -71,5 +70,4 @@ else:
 SEARCHER = FileStorage("data/msmarcoidx").open_index().searcher(weighting=okapi.weighting)
 
 
-PMI = util.load("pmi10k.pkl")
-
+PMI = util.load("pmi1m.pkl")

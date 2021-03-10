@@ -71,7 +71,7 @@ if __name__ == "__main__":
     parser.add_argument("-graded", action="store_true")
     parser.add_argument("-num_docs", type=int, default=25000)
     parser.add_argument("-num_graded", type=int, default=25000)
-    parser.add_argument("-load", type=str, default="document_features_25000_binary.pkl")
+    parser.add_argument("-load", type=str, default=None)
     args = parser.parse_args()
 
     if args.load is None:
@@ -101,14 +101,14 @@ if __name__ == "__main__":
             for _ in range(args.num_graded // 316):
                 features = np.concatenate((features, graded_features), axis=0)
                 labels = np.concatenate((labels, graded_labels), axis=0)
+            labels = labels.astype(np.float32)
 
-        labels = labels.astype(np.float32)
-
-        util.save(f"document_features_{args.num_docs}_{'graded' if args.graded else 'binary'}.pkl", features)
-        util.save(f"document_labels_{args.num_docs}_{'graded' if args.graded else 'binary'}.pkl", labels)
+        util.save(
+            f"doc_features_{args.num_docs + (args.num_graded if args.graded else 0)}_{'graded' if args.graded else 'binary'}.pkl",
+            (features, labels),
+        )
     else:
-        features = util.load(args.load)
-        labels = util.load(args.load.replace("features", "labels"))
+        features, labels = util.load(args.load)
     features[~np.isfinite(features)] = 0
 
     print(features)

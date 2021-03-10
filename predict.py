@@ -11,22 +11,22 @@ from tqdm.contrib.concurrent import process_map
 from whoosh.analysis import StemmingAnalyzer
 from whoosh.filedb.filestore import FileStorage
 from whoosh.qparser import QueryParser
-from query_cluster import get_query_features
+
 import okapi
 import util
 from features import get_doc_feats
-from singletons import SEARCHER
+from query_cluster import get_query_features
+from train_cluster_svm import ClusterSVM
 
 parser = argparse.ArgumentParser()
-parser.add_argument("model", type=str, choices=["bm25", "okapi", "svc", "svr", "adarank"])
+parser.add_argument("model", type=str, choices=["bm25", "okapi", "svc", "svr", "clusvm", "adarank"])
 parser.add_argument("-svm_file", type=str, default="svm")
 parser.add_argument("-limit", type=int, default=1000)
 parser.add_argument("-binary", action="store_true")
 parser.add_argument("-add_bm25", action="store_true")
 args = parser.parse_args()
 
-ix = FileStorage("data/msmarcoidx").open_index()
-qp = QueryParser("body", schema=ix.schema)
+from singletons import PREPROCESS, SEARCHER
 
 run_id = args.model
 if args.model == "clusvm":
@@ -35,17 +35,11 @@ elif "sv" in args.model:
     svm = util.load(f"{args.svm_file}.pkl")
 elif args.model == "adarank":
     alpha = np.load("ada.npy")
-elif args.model == "bm25":
-    SEARCHER = FileStorage("data/msmarcoidx").open_index().searcher()
-
-top100 = {}
-with open("data/msmarco-doctest2019-top100") as f:
-    for qid, _, docid, _, _, _ in csv.reader(f, delimiter=" "):
-        if qid not in top100:
-            top100[qid] = []
-        top100[qid].append(docid)
-
-preprocess = whoosh.analysis.StemmingAnalyzer()
+else:
+    ix = FileStorage("data/msmarcoidx").open_index()
+    if args.model == "bm25":
+        SEARCHER = ix.searcher()
+    qp = QueryParser("body", schema=ix.schema)
 
 
 def predict(inp):
@@ -58,8 +52,9 @@ def predict(inp):
             ret.append([qid, hit["docid"], rank + 1, results.score(rank), run_id])
 
     elif args.model == "clusvm":
-        query = [token.text for token in preprocess(query)]
+        query = [token.text for token in PREPROCESS(query)]
         queryfeats = get_query_features(query)
+        queryfeats = np.concatenate([queryfeats[None, :]] * len(top100[qid]))
 
         docids = []
         features = []
@@ -76,7 +71,7 @@ def predict(inp):
                 ret.append([qid, docids[idx], rank + 1, relevance[idx], run_id])
 
     elif "sv" in args.model or args.model == "adarank":
-        query = [token.text for token in preprocess(query)]
+        query = [token.text for token in PREPROCESS(query)]
 
         docids = []
         features = []
@@ -105,6 +100,13 @@ def predict(inp):
 
     return ret
 
+
+top100 = {}
+with open("data/msmarco-doctest2019-top100") as f:
+    for qid, _, docid, _, _, _ in csv.reader(f, delimiter=" "):
+        if qid not in top100:
+            top100[qid] = []
+        top100[qid].append(docid)
 
 # filter out the test queries which actually have qrels to evaluate with trec_eval
 with open("data/2019qrels-docs.txt", "rt", encoding="utf8") as f:
